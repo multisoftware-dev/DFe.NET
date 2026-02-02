@@ -120,9 +120,9 @@ jobs:
               -p:PackageVersion=$v
           }
 
-          Pack-Nuspec "NuGet\Zeus.Net.NFe.NFCe\Zeus.Net.NFe.NFCe.csproj" "$env:NUSPEC_ROOT\NFe\MultiCTe.Zeus.NFe.nuspec"
-          Pack-Nuspec "NFe.Danfe.Nativo\NFe.Danfe.Nativo.csproj"         "$env:NUSPEC_ROOT\NFe.Danfe.Nativo\MultiCTe.Zeus.Danfe.Nativo.nuspec"
-          Pack-Nuspec "NFe.Danfe.OpenFast\NFe.Danfe.OpenFast.csproj"     "$env:NUSPEC_ROOT\NFe.Danfe.OpenFast\MultiCTe.Zeus.Danfe.OpenFast.nuspec"
+          Pack-Nuspec "NuGet\Zeus.Net.NFe.NFCe\Zeus.Net.NFe.NFCe.csproj" "$env:NUSPEC_ROOT\MultiCTe.Zeus.NFe\MultiCTe.Zeus.NFe.nuspec"
+          Pack-Nuspec "NFe.Danfe.Nativo\NFe.Danfe.Nativo.csproj"         "$env:NUSPEC_ROOT\MultiCTe.Zeus.Danfe.Nativo\MultiCTe.Zeus.Danfe.Nativo.nuspec"
+          Pack-Nuspec "NFe.Danfe.OpenFast\NFe.Danfe.OpenFast.csproj"     "$env:NUSPEC_ROOT\MultiCTe.Zeus.Danfe.OpenFast\MultiCTe.Zeus.Danfe.OpenFast.nuspec"
 
       - name: Create assets (dlls + nupkgs zips)
         shell: pwsh
