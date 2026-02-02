@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2011/08/nuspec.xsd">
+  <metadata>
+    <id>MultiCTe.Zeus.NFe</id>
+    <version>$version$</version>
+    <title>Zeus NF-e e NFC-e (x86/x64)</title>
+    <authors>Zeus</authors>
+    <owners>Zeus</owners>
+    <projectUrl>https://github.com/ZeusAutomacao/DFe.NET</projectUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <description>Biblioteca para geração de nf-e e nfc-e.</description>
+    <releaseNotes />
+    <copyright>zeus</copyright>
+    <language>pt-BR</language>
+    <tags>nfc-e nf-e nfce nfe</tags>
+    <dependencies>
+      <group targetFramework=".NETFramework4.7.2" />
+      <group targetFramework=".NETFramework4.8" />
+      <group targetFramework="net8.0" />
+      <group targetFramework=".NETStandard2.0" />
+    </dependencies>
+  </metadata>
+  <files>
+
+    <!-- netstandard2.0 -->
+    <file src="..\..\DFe.Classes\bin\Release\netstandard2.0\DFe.Classes.dll"
+      target="lib/netstandard2.0/DFe.Classes.dll" />
+    <file src="..\..\DFe.Utils\bin\Release\netstandard2.0\DFe.Utils.dll"
+      target="lib/netstandard2.0/DFe.Utils.dll" />
+    <file src="..\..\DFe.Wsdl\bin\Release\netstandard2.0\DFe.Wsdl.dll"
+      target="lib/netstandard2.0/DFe.Wsdl.dll" />
+    <file src="..\..\NFe.Classes\bin\Release\netstandard2.0\NFe.Classes.dll"
+      target="lib/netstandard2.0/NFe.Classes.dll" />
+    <file src="..\..\NFe.Servicos\bin\Release\netstandard2.0\NFe.Servicos.dll"
+      target="lib/netstandard2.0/NFe.Servicos.dll" />
+    <file src="..\..\NFe.Utils\bin\Release\netstandard2.0\NFe.Utils.dll"
+      target="lib/netstandard2.0/NFe.Utils.dll" />
+    <file src="..\..\NFe.Wsdl.Standard\bin\Release\netstandard2.0\NFe.Wsdl.Standard.dll"
+      target="lib/netstandard2.0/NFe.Wsdl.Standard.dll" />
+
+    <!-- net8.0 -->
+    <file src="..\..\DFe.Classes\bin\Release\net8.0\DFe.Classes.dll"
+      target="lib/net8.0/DFe.Classes.dll" />
+    <file src="..\..\DFe.Utils\bin\Release\net8.0\DFe.Utils.dll" target="lib/net8.0/DFe.Utils.dll" />
+    <file src="..\..\DFe.Wsdl\bin\Release\net8.0\DFe.Wsdl.dll" target="lib/net8.0/DFe.Wsdl.dll" />
+    <file src="..\..\NFe.Classes\bin\Release\net8.0\NFe.Classes.dll"
+      target="lib/net8.0/NFe.Classes.dll" />
+    <file src="..\..\NFe.Servicos\bin\Release\net8.0\NFe.Servicos.dll"
+      target="lib/net8.0/NFe.Servicos.dll" />
+    <file src="..\..\NFe.Utils\bin\Release\net8.0\NFe.Utils.dll" target="lib/net8.0/NFe.Utils.dll" />
+    <file src="..\..\NFe.Wsdl.Standard\bin\Release\net8.0\NFe.Wsdl.Standard.dll"
+      target="lib/net8.0/NFe.Wsdl.Standard.dll" />
+
+    <!-- net472 -->
+    <file src="..\..\DFe.Classes\bin\Release\net472\DFe.Classes.dll"
+      target="lib/net472/DFe.Classes.dll" />
+    <file src="..\..\DFe.Utils\bin\Release\net472\DFe.Utils.dll" target="lib/net472/DFe.Utils.dll" />
+    <file src="..\..\DFe.Wsdl\bin\Release\net472\DFe.Wsdl.dll" target="lib/net472/DFe.Wsdl.dll" />
+    <file src="..\..\NFe.Classes\bin\Release\net472\NFe.Classes.dll"
+      target="lib/net472/NFe.Classes.dll" />
+    <file src="..\..\NFe.Servicos\bin\Release\net472\NFe.Servicos.dll"
+      target="lib/net472/NFe.Servicos.dll" />
+    <file src="..\..\NFe.Utils\bin\Release\net472\NFe.Utils.dll" target="lib/net472/NFe.Utils.dll" />
+    <file src="..\..\NFe.Wsdl\bin\Release\net472\NFe.Wsdl.dll" target="lib/net472/NFe.Wsdl.dll" />
+
+    <!-- net48 -->
+    <file src="..\..\DFe.Classes\bin\Release\net48\DFe.Classes.dll"
+      target="lib/net48/DFe.Classes.dll" />
+    <file src="..\..\DFe.Utils\bin\Release\net48\DFe.Utils.dll" target="lib/net48/DFe.Utils.dll" />
+    <file src="..\..\DFe.Wsdl\bin\Release\net48\DFe.Wsdl.dll" target="lib/net48/DFe.Wsdl.dll" />
+    <file src="..\..\NFe.Classes\bin\Release\net48\NFe.Classes.dll"
+      target="lib/net48/NFe.Classes.dll" />
+    <file src="..\..\NFe.Servicos\bin\Release\net48\NFe.Servicos.dll"
+      target="lib/net48/NFe.Servicos.dll" />
+    <file src="..\..\NFe.Utils\bin\Release\net48\NFe.Utils.dll" target="lib/net48/NFe.Utils.dll" />
+    <file src="..\..\NFe.Wsdl\bin\Release\net48\NFe.Wsdl.dll" target="lib/net48/NFe.Wsdl.dll" />
+  </files>
+</package>

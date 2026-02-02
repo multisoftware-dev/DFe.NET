@@ -1,0 +1,197 @@
+name: Publish MultiCTe packages
+
+on:
+  push:
+    branches: [ master ]     # Sync fork updates master -> triggers
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  UPSTREAM_OWNER: ZeusAutomacao
+  UPSTREAM_REPO: DFe.NET
+  OVERLAY_BRANCH: multicte-build
+
+  NUSPEC_ROOT: NuGet-MultiCTe
+  NUGET_SOURCE_URL: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
+
+jobs:
+  meta:
+    name: Resolve latest upstream release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.rel.outputs.tag }}
+      version: ${{ steps.rel.outputs.version }}
+      url: ${{ steps.rel.outputs.url }}
+      publish: ${{ steps.gate.outputs.publish }}
+      release_tag: ${{ steps.gate.outputs.release_tag }}
+    steps:
+      - name: Get latest upstream release
+        id: rel
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = process.env.UPSTREAM_OWNER;
+            const repo  = process.env.UPSTREAM_REPO;
+
+            const latest = await github.rest.repos.getLatestRelease({ owner, repo });
+            const tag = latest.data.tag_name;
+            const version = tag.startsWith('v') ? tag.slice(1) : tag;
+
+            core.setOutput('tag', tag);
+            core.setOutput('version', version);
+            core.setOutput('url', latest.data.html_url);
+
+      - name: Skip if already released in this repo
+        id: gate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = "${{ steps.rel.outputs.version }}";
+            const releaseTag = `multicte-v${version}`;
+            core.setOutput('release_tag', releaseTag);
+
+            const { owner, repo } = context.repo;
+            try {
+              await github.rest.repos.getReleaseByTag({ owner, repo, tag: releaseTag });
+              core.info(`Release ${releaseTag} already exists -> skip publish.`);
+              core.setOutput('publish', 'false');
+            } catch {
+              core.setOutput('publish', 'true');
+            }
+
+  build_pack:
+    name: Build + pack (Windows)
+    needs: meta
+    if: needs.meta.outputs.publish == 'true'
+    runs-on: windows-2022
+    steps:
+      - name: Checkout fork (master mirror)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout upstream release tag and merge overlay
+        shell: pwsh
+        run: |
+          git remote add upstream "https://github.com/${{ env.UPSTREAM_OWNER }}/${{ env.UPSTREAM_REPO }}.git" 2>$null
+          git fetch upstream --tags --force
+          git fetch origin ${{ env.OVERLAY_BRANCH }} --force
+
+          $tag = "${{ needs.meta.outputs.tag }}"
+          $ver = "${{ needs.meta.outputs.version }}"
+
+          # Build from the upstream release tag commit
+          git checkout -B "build/$ver" "tags/$tag"
+
+          # Apply overlay changes (no copying)
+          git merge --no-ff "origin/${{ env.OVERLAY_BRANCH }}" -m "chore: apply overlay on $tag"
+
+      - name: Setup .NET (GitHub Packages source-url)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+          source-url: ${{ env.NUGET_SOURCE_URL }}
+        env:
+          NUGET_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore + Build (Release)
+        shell: pwsh
+        run: |
+          dotnet restore
+          dotnet build -c Release
+
+      - name: Pack (nuspec-based)
+        shell: pwsh
+        run: |
+          $repo = (Resolve-Path .).Path
+          $v = "${{ needs.meta.outputs.version }}"
+          New-Item -ItemType Directory -Force -Path "$repo\_nupkgs" | Out-Null
+
+          function Pack-Nuspec($csproj, $nuspecRelPath) {
+            $nuspec = Join-Path $repo $nuspecRelPath
+            if (!(Test-Path $nuspec)) { throw "Missing nuspec: $nuspec" }
+
+            dotnet pack $csproj -c Release -v minimal -o "$repo\_nupkgs" `
+              -p:NuspecFile="$nuspec" `
+              -p:NuspecProperties="version=$v" `
+              -p:PackageVersion=$v
+          }
+
+          Pack-Nuspec "NuGet\Zeus.Net.NFe.NFCe\Zeus.Net.NFe.NFCe.csproj" "$env:NUSPEC_ROOT\NFe\MultiCTe.Zeus.NFe.nuspec"
+          Pack-Nuspec "NFe.Danfe.Nativo\NFe.Danfe.Nativo.csproj"         "$env:NUSPEC_ROOT\NFe.Danfe.Nativo\MultiCTe.Zeus.Danfe.Nativo.nuspec"
+          Pack-Nuspec "NFe.Danfe.OpenFast\NFe.Danfe.OpenFast.csproj"     "$env:NUSPEC_ROOT\NFe.Danfe.OpenFast\MultiCTe.Zeus.Danfe.OpenFast.nuspec"
+
+      - name: Create assets (dlls + nupkgs zips)
+        shell: pwsh
+        run: |
+          $v = "${{ needs.meta.outputs.version }}"
+          New-Item -ItemType Directory -Force _dlls | Out-Null
+
+          $paths = @(
+            "NuGet\Zeus.Net.NFe.NFCe\bin\Release",
+            "NFe.Danfe.OpenFast\bin\Release",
+            "NFe.Danfe.Nativo\bin\Release"
+          )
+
+          foreach ($p in $paths) {
+            if (Test-Path $p) { Copy-Item $p -Recurse -Force _dlls }
+          }
+
+          Compress-Archive -Path _dlls\* -DestinationPath ".\MultiCTe-DFeNET-dlls-$v.zip" -Force
+          Compress-Archive -Path _nupkgs\*.nupkg -DestinationPath ".\MultiCTe-DFeNET-nupkgs-$v.zip" -Force
+
+      - name: Upload artifacts for publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: |
+            _nupkgs/*.nupkg
+            MultiCTe-DFeNET-dlls-*.zip
+            MultiCTe-DFeNET-nupkgs-*.zip
+
+  publish_release:
+    name: Publish + release (Linux)
+    needs: [meta, build_pack]
+    if: needs.meta.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: ./artifacts
+
+      - name: Setup .NET (GitHub Packages source-url)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+          source-url: ${{ env.NUGET_SOURCE_URL }}
+        env:
+          NUGET_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push packages to GitHub Packages
+        run: |
+          dotnet nuget push "./artifacts/**/*.nupkg" \
+            --source "${{ env.NUGET_SOURCE_URL }}" \
+            --api-key "${{ secrets.GITHUB_TOKEN }}" \
+            --skip-duplicate
+
+      - name: Create tag/release + upload assets
+        uses: ncipollo/release-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ needs.meta.outputs.release_tag }}
+          name: MultiCTe DFe.NET ${{ needs.meta.outputs.version }}
+          body: |
+            Upstream tag: ${{ needs.meta.outputs.tag }}
+            Upstream URL: ${{ needs.meta.outputs.url }}
+
+            Packages published to GitHub Packages:
+            ${{ env.NUGET_SOURCE_URL }}
+          artifacts: |
+            artifacts/*.zip
+            artifacts/**/*.nupkg
+          artifactErrorsFailBuild: true
