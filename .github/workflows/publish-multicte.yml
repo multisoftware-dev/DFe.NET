@@ -37,7 +37,6 @@ jobs:
       upstream_tag: ${{ steps.upstream.outputs.upstream_tag }}
       upstream_version: ${{ steps.upstream.outputs.upstream_version }}
       final_version: ${{ steps.upstream.outputs.final_version }}
-      upstream_body: ${{ steps.upstream.outputs.upstream_body }}
 
     steps:
       - name: Fetch upstream latest release (JS)
@@ -60,7 +59,6 @@ jobs:
             // Fetch latest upstream release
             const rel = await github.rest.repos.getLatestRelease({ owner, repo });
             const tag = rel.data.tag_name;
-            const body = rel.data.body ?? "";
 
             if (!tag) {
               core.setFailed("Upstream latest release has no tag_name.");
@@ -91,8 +89,145 @@ jobs:
             core.setOutput("upstream_tag", tag);
             core.setOutput("upstream_version", baseVersion);
             core.setOutput("final_version", finalVersion);
-            core.setOutput("upstream_body", body);
+  release_notes:
+    name: Build release body (PRs + commits) from upstream
+    runs-on: ubuntu-latest
+    needs: [versioning]
 
+    outputs:
+      release_body_md: ${{ steps.notes.outputs.release_body_md }}
+
+    steps:
+      - name: Build markdown release notes (JS)
+        id: notes
+        uses: actions/github-script@v7
+        env:
+          UPSTREAM_REPO: ${{ env.UPSTREAM_REPO }} # keep the same env you set at workflow-level
+        with:
+          script: |
+            const upstreamRepo = process.env.UPSTREAM_REPO;
+            if (!upstreamRepo || !upstreamRepo.includes("/")) {
+              core.setFailed("UPSTREAM_REPO must be set like 'owner/repo'.");
+              return;
+            }
+            const [owner, repo] = upstreamRepo.split("/");
+
+            const currentTag = `${{ needs.versioning.outputs.upstream_tag }}`;
+            if (!currentTag) {
+              core.setFailed("Missing upstream_tag from previous job.");
+              return;
+            }
+
+            // Helper: paginate
+            async function paginate(method, params) {
+              return await github.paginate(method, { ...params, per_page: 100 });
+            }
+
+            // 1) Find the previous release tag (older than currentTag)
+            const releases = await paginate(github.rest.repos.listReleases, { owner, repo });
+            const idx = releases.findIndex(r => r.tag_name === currentTag);
+            if (idx === -1) {
+              core.setFailed(`Could not find current tag '${currentTag}' in upstream releases list.`);
+              return;
+            }
+            const prev = releases[idx + 1]; // listReleases returns newest-first
+            const previousTag = prev?.tag_name ?? null;
+
+            // 2) Collect commits in the range (previousTag..currentTag) if previousTag exists.
+            // If this is the first release, we’ll just list commits pointed by the tag’s commit (limited).
+            let commits = [];
+            if (previousTag) {
+              const cmp = await github.rest.repos.compareCommits({
+                owner, repo,
+                base: previousTag,
+                head: currentTag
+              });
+
+              // compareCommits returns up to 250 commits depending on API; for huge ranges, this is limited.
+              commits = cmp.data.commits ?? [];
+            } else {
+              // Fallback: list commits from the tag commit (shallow, best-effort)
+              const tagRef = await github.rest.git.getRef({ owner, repo, ref: `tags/${currentTag}` });
+              const tagSha = tagRef.data.object.sha;
+
+              const list = await github.rest.repos.listCommits({
+                owner, repo,
+                sha: tagSha,
+                per_page: 50
+              });
+              commits = list.data ?? [];
+            }
+
+            // 3) For each commit, try to find associated PR(s)
+            // This endpoint requires the "groot-preview" header historically; GitHub now generally supports it,
+            // but we'll include it defensively.
+            const prMap = new Map(); // key: PR number, value: pr object
+            const commitSummaries = [];
+
+            for (const c of commits) {
+              const sha = c.sha;
+              const msg = (c.commit?.message ?? "").split("\n")[0] || "(no message)";
+              commitSummaries.push({ sha, msg, author: c.commit?.author?.name ?? null });
+
+              try {
+                const prs = await github.request(
+                  "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls",
+                  {
+                    owner, repo,
+                    commit_sha: sha,
+                    headers: { accept: "application/vnd.github+json" }
+                  }
+                );
+
+                for (const pr of (prs.data ?? [])) {
+                  if (!prMap.has(pr.number)) prMap.set(pr.number, pr);
+                }
+              } catch (e) {
+                // Not fatal: not every commit is associated with a PR (direct pushes, merge commits, etc.)
+              }
+            }
+
+            const prs = Array.from(prMap.values())
+              .sort((a, b) => a.number - b.number);
+
+            // 4) Build markdown
+            const lines = [];
+            lines.push(`# Upstream release ${currentTag}`);
+            if (previousTag) lines.push(`**Changes since:** ${previousTag}`);
+            lines.push("");
+
+            // PR section
+            lines.push(`## Pull requests (${prs.length})`);
+            if (prs.length === 0) {
+              lines.push("_No associated PRs found (may be direct commits or squash merges without association)._");
+            } else {
+              for (const pr of prs) {
+                const title = (pr.title ?? "").trim();
+                const number = pr.number;
+                const url = pr.html_url;
+                const user = pr.user?.login ? `@${pr.user.login}` : "";
+                lines.push(`- [#${number}](${url}) ${title} ${user}`.trim());
+              }
+            }
+            lines.push("");
+
+            // Commits section (limit to keep release notes readable)
+            const MAX_COMMITS = 200;
+            lines.push(`## Commits (${Math.min(commitSummaries.length, MAX_COMMITS)}${commitSummaries.length > MAX_COMMITS ? "+" : ""})`);
+            const shown = commitSummaries.slice(0, MAX_COMMITS);
+            for (const c of shown) {
+              const shortSha = c.sha.substring(0, 7);
+              const author = c.author ? ` (${c.author})` : "";
+              lines.push(`- \`${shortSha}\` ${c.msg}${author}`);
+            }
+            if (commitSummaries.length > MAX_COMMITS) {
+              lines.push("");
+              lines.push(`_Commit list truncated at ${MAX_COMMITS} entries._`);
+            }
+
+            // 5) Output (as a single string)
+            const body = lines.join("\n");
+            core.setOutput("release_body_md", body);
   # build_and_pack_windows:
   #   name: Build + Pack (Windows)
   #   runs-on: windows-2022
