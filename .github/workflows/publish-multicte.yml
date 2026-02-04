@@ -1,197 +1,328 @@
-name: Publish MultiCTe packages
+name: multicte-build (build, sync upstream release, upload assets, publish)
 
 on:
   push:
-    branches: [ master ]     # Sync fork updates master -> triggers
-  workflow_dispatch: {}
+    branches: [multicte-build]
+  workflow_dispatch:
+    inputs:
+      path:
+        description: 'Digits appended to the last version block (HHmm). Example: 001 -> ...HHmm001'
+        required: false
+        default: ''
 
 permissions:
-  contents: write
-  packages: write
+  contents: write # create/update releases + upload assets
+  packages: write # publish to GitHub Packages NuGet
+  actions: read
 
 env:
-  UPSTREAM_OWNER: ZeusAutomacao
-  UPSTREAM_REPO: DFe.NET
-  OVERLAY_BRANCH: multicte-build
+  CONFIGURATION: Release
 
-  NUSPEC_ROOT: NuGet-MultiCTe
-  NUGET_SOURCE_URL: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
+  # Upstream GitHub repo that defines the canonical releases
+  UPSTREAM_REPO: ZeusAutomacao/DFe.NET
+
+  # Nuspecs that you want to pack
+  NUSPECS: |
+    NuGet-MultiCTe/specs/MultiCTe.Zeus.NFe.nuspec
+    NuGet-MultiCTe/specs/MultiCTe.Zeus.Danfe.OpenFast.nuspec
+    NuGet-MultiCTe/specs/MultiCTe.Zeus.Danfe.Nativo.nuspec
 
 jobs:
-  meta:
-    name: Resolve latest upstream release
+  versioning:
+    name: Get upstream latest release + compute version
     runs-on: ubuntu-latest
+
+    # expose outputs to other jobs via needs.get_upstream_release.outputs.*
     outputs:
-      tag: ${{ steps.rel.outputs.tag }}
-      version: ${{ steps.rel.outputs.version }}
-      url: ${{ steps.rel.outputs.url }}
-      publish: ${{ steps.gate.outputs.publish }}
-      release_tag: ${{ steps.gate.outputs.release_tag }}
+      upstream_tag: ${{ steps.upstream.outputs.upstream_tag }}
+      upstream_version: ${{ steps.upstream.outputs.upstream_version }}
+      final_version: ${{ steps.upstream.outputs.final_version }}
+      upstream_body: ${{ steps.upstream.outputs.upstream_body }}
+
     steps:
-      - name: Get latest upstream release
-        id: rel
+      - name: Fetch upstream latest release (JS)
+        id: upstream
         uses: actions/github-script@v7
         with:
           script: |
-            const owner = process.env.UPSTREAM_OWNER;
-            const repo  = process.env.UPSTREAM_REPO;
+            // CONFIG
+            const upstreamRepo = process.env.UPSTREAM_REPO; // e.g. "ZeusAutomacao/DFe.NET"
+            if (!upstreamRepo || !upstreamRepo.includes("/")) {
+              core.setFailed("UPSTREAM_REPO must be set like 'owner/repo'.");
+              return;
+            }
+            const [owner, repo] = upstreamRepo.split("/");
 
-            const latest = await github.rest.repos.getLatestRelease({ owner, repo });
-            const tag = latest.data.tag_name;
-            const version = tag.startsWith('v') ? tag.slice(1) : tag;
+            // Optional "path" input (only exists on workflow_dispatch runs)
+            // We'll append digits from it to the *last numeric block* of the version.
+            const rawPath = (context.payload?.inputs?.path ?? "").trim();
 
-            core.setOutput('tag', tag);
-            core.setOutput('version', version);
-            core.setOutput('url', latest.data.html_url);
+            // Fetch latest upstream release
+            const rel = await github.rest.repos.getLatestRelease({ owner, repo });
+            const tag = rel.data.tag_name;
+            const body = rel.data.body ?? "";
 
-      - name: Skip if already released in this repo
-        id: gate
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const version = "${{ steps.rel.outputs.version }}";
-            const releaseTag = `multicte-v${version}`;
-            core.setOutput('release_tag', releaseTag);
-
-            const { owner, repo } = context.repo;
-            try {
-              await github.rest.repos.getReleaseByTag({ owner, repo, tag: releaseTag });
-              core.info(`Release ${releaseTag} already exists -> skip publish.`);
-              core.setOutput('publish', 'false');
-            } catch {
-              core.setOutput('publish', 'true');
+            if (!tag) {
+              core.setFailed("Upstream latest release has no tag_name.");
+              return;
             }
 
-  build_pack:
-    name: Build + pack (Windows)
-    needs: meta
-    if: needs.meta.outputs.publish == 'true'
-    runs-on: windows-2022
-    steps:
-      - name: Checkout fork (master mirror)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+            // Upstream uses yyyy.MM.dd.HHmm (4 blocks). Strip leading "v" if present.
+            let baseVersion = String(tag).trim();
+            if (baseVersion.startsWith("v")) baseVersion = baseVersion.substring(1);
 
-      - name: Checkout upstream release tag and merge overlay
-        shell: pwsh
-        run: |
-          git remote add upstream "https://github.com/${{ env.UPSTREAM_OWNER }}/${{ env.UPSTREAM_REPO }}.git" 2>$null
-          git fetch upstream --tags --force
-          git fetch origin ${{ env.OVERLAY_BRANCH }} --force
+            const parts = baseVersion.split(".");
+            if (parts.length !== 4 || parts.some(p => !/^\d+$/.test(p))) {
+              core.setFailed(`Upstream tag '${tag}' is not a 4-part numeric version (yyyy.MM.dd.HHmm).`);
+              return;
+            }
 
-          $tag = "${{ needs.meta.outputs.tag }}"
-          $ver = "${{ needs.meta.outputs.version }}"
+            let finalVersion = baseVersion;
 
-          # Build from the upstream release tag commit
-          git checkout -B "build/$ver" "tags/$tag"
+            // Append only digits from "path" to the last block
+            // Example: base 2026.01.19.1935 + path "001" => 2026.01.19.1935001
+            // If path contains non-digits, we strip them.
+            const suffixDigits = rawPath.replace(/\D+/g, "");
+            if (suffixDigits.length > 0) {
+              parts[3] = parts[3] + suffixDigits;
+              finalVersion = parts.join(".");
+            }
 
-          # Apply overlay changes (no copying)
-          git merge --no-ff "origin/${{ env.OVERLAY_BRANCH }}" -m "chore: apply overlay on $tag"
+            core.setOutput("upstream_tag", tag);
+            core.setOutput("upstream_version", baseVersion);
+            core.setOutput("final_version", finalVersion);
+            core.setOutput("upstream_body", body);
 
-      - name: Setup .NET (GitHub Packages source-url)
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-          source-url: ${{ env.NUGET_SOURCE_URL }}
-        env:
-          NUGET_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # build_and_pack_windows:
+  #   name: Build + Pack (Windows)
+  #   runs-on: windows-2022
+  #   outputs:
+  #     # "raw" version == upstream tag
+  #     upstream_version: ${{ steps.versions.outputs.upstream_version }}
+  #     # publish version is suffixed so NuGet feed can accept it
+  #     publish_version: ${{ steps.versions.outputs.publish_version }}
+  #   steps:
+  #     - name: Install .NET Framework targeting packs
+  #       shell: pwsh
+  #       run: |
+  #         choco install netfx-4.7.2-devpack -y
+  #         choco install netfx-4.8-devpack -y
 
-      - name: Restore + Build (Release)
-        shell: pwsh
-        run: |
-          dotnet restore
-          dotnet build -c Release
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+  #       with:
+  #         fetch-depth: 0
 
-      - name: Pack (nuspec-based)
-        shell: pwsh
-        run: |
-          $repo = (Resolve-Path .).Path
-          $v = "${{ needs.meta.outputs.version }}"
-          New-Item -ItemType Directory -Force -Path "$repo\_nupkgs" | Out-Null
+  #     - name: Setup .NET
+  #       uses: actions/setup-dotnet@v4
+  #       with:
+  #         dotnet-version: |
+  #           8.0.x
 
-          function Pack-Nuspec($csproj, $nuspecRelPath) {
-            $nuspec = Join-Path $repo $nuspecRelPath
-            if (!(Test-Path $nuspec)) { throw "Missing nuspec: $nuspec" }
+  #     - name: Setup NuGet.exe
+  #       uses: NuGet/setup-nuget@v2
 
-            dotnet pack $csproj -c Release -v minimal -o "$repo\_nupkgs" `
-              -p:NuspecFile="$nuspec" `
-              -p:NuspecProperties="version=$v" `
-              -p:PackageVersion=$v
-          }
+  #     - name: Restore + Build (auto-detect .sln)
+  #       shell: pwsh
+  #       run: |
+  #         $ErrorActionPreference = "Stop"
+  #         $sln = Get-ChildItem -Path . -Filter *.sln -Recurse | Select-Object -First 1
+  #         if (-not $sln) { throw "No .sln found in repo. Add one or hardcode the solution path in the workflow." }
 
-          Pack-Nuspec "NuGet\Zeus.Net.NFe.NFCe\Zeus.Net.NFe.NFCe.csproj" "$env:NUSPEC_ROOT\MultiCTe.Zeus.NFe\MultiCTe.Zeus.NFe.nuspec"
-          Pack-Nuspec "NFe.Danfe.Nativo\NFe.Danfe.Nativo.csproj"         "$env:NUSPEC_ROOT\MultiCTe.Zeus.Danfe.Nativo\MultiCTe.Zeus.Danfe.Nativo.nuspec"
-          Pack-Nuspec "NFe.Danfe.OpenFast\NFe.Danfe.OpenFast.csproj"     "$env:NUSPEC_ROOT\MultiCTe.Zeus.Danfe.OpenFast\MultiCTe.Zeus.Danfe.OpenFast.nuspec"
+  #         dotnet restore $sln.FullName
+  #         dotnet build   $sln.FullName -c $env:CONFIGURATION --no-restore
 
-      - name: Create assets (dlls + nupkgs zips)
-        shell: pwsh
-        run: |
-          $v = "${{ needs.meta.outputs.version }}"
-          New-Item -ItemType Directory -Force _dlls | Out-Null
+  #     - name: Pack nuspecs (raw upstream version) + collect referenced DLLs
+  #       id: pack
+  #       shell: pwsh
+  #       run: |
+  #         $ErrorActionPreference = "Stop"
 
-          $paths = @(
-            "NuGet\Zeus.Net.NFe.NFCe\bin\Release",
-            "NFe.Danfe.OpenFast\bin\Release",
-            "NFe.Danfe.Nativo\bin\Release"
-          )
+  #         $outRoot = Join-Path $PWD "out"
+  #         $pkgDir  = Join-Path $outRoot "packages-raw"
+  #         $dllDir  = Join-Path $outRoot "dlls"
+  #         New-Item -ItemType Directory -Force -Path $pkgDir, $dllDir | Out-Null
 
-          foreach ($p in $paths) {
-            if (Test-Path $p) { Copy-Item $p -Recurse -Force _dlls }
-          }
+  #         $version = "${{ steps.versions.outputs.upstream_version }}"
 
-          Compress-Archive -Path _dlls\* -DestinationPath ".\MultiCTe-DFeNET-dlls-$v.zip" -Force
-          Compress-Archive -Path _nupkgs\*.nupkg -DestinationPath ".\MultiCTe-DFeNET-nupkgs-$v.zip" -Force
+  #         $nuspecs = @()
+  #         "${{ env.NUSPECS }}" -split "`n" | ForEach-Object {
+  #           $p = $_.Trim()
+  #           if ($p) { $nuspecs += $p }
+  #         }
 
-      - name: Upload artifacts for publish job
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-output
-          path: |
-            _nupkgs/*.nupkg
-            MultiCTe-DFeNET-dlls-*.zip
-            MultiCTe-DFeNET-nupkgs-*.zip
+  #         foreach ($ns in $nuspecs) {
+  #           if (-not (Test-Path $ns)) { throw "Nuspec not found: $ns" }
 
-  publish_release:
-    name: Publish + release (Linux)
-    needs: [meta, build_pack]
-    if: needs.meta.outputs.publish == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: build-output
-          path: ./artifacts
+  #           Write-Host "Packing: $ns (version=$version)"
+  #           nuget pack $ns -Version $version -Properties "Configuration=$env:CONFIGURATION" -OutputDirectory $pkgDir -NonInteractive
 
-      - name: Setup .NET (GitHub Packages source-url)
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-          source-url: ${{ env.NUGET_SOURCE_URL }}
-        env:
-          NUGET_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #           # Collect DLLs listed in <files><file src="...dll" .../>
+  #           [xml]$x = Get-Content $ns -Raw
+  #           $nsm = New-Object System.Xml.XmlNamespaceManager($x.NameTable)
+  #           $nsm.AddNamespace("n", $x.DocumentElement.NamespaceURI)
 
-      - name: Push packages to GitHub Packages
-        run: |
-          dotnet nuget push "./artifacts/**/*.nupkg" \
-            --source "${{ env.NUGET_SOURCE_URL }}" \
-            --api-key "${{ secrets.GITHUB_TOKEN }}" \
-            --skip-duplicate
+  #           $fileNodes = $x.SelectNodes("//n:files/n:file", $nsm)
+  #           foreach ($node in $fileNodes) {
+  #             $src = $node.GetAttribute("src")
+  #             if ([string]::IsNullOrWhiteSpace($src)) { continue }
 
-      - name: Create tag/release + upload assets
-        uses: ncipollo/release-action@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ needs.meta.outputs.release_tag }}
-          name: MultiCTe DFe.NET ${{ needs.meta.outputs.version }}
-          body: |
-            Upstream tag: ${{ needs.meta.outputs.tag }}
-            Upstream URL: ${{ needs.meta.outputs.url }}
+  #             # nuspec src paths are relative to nuspec file
+  #             $nsDir = Split-Path -Parent (Resolve-Path $ns)
+  #             $full  = Resolve-Path (Join-Path $nsDir $src) -ErrorAction Stop
 
-            Packages published to GitHub Packages:
-            ${{ env.NUGET_SOURCE_URL }}
-          artifacts: |
-            artifacts/*.zip
-            artifacts/**/*.nupkg
-          artifactErrorsFailBuild: true
+  #             if ($full.Path.ToLower().EndsWith(".dll")) {
+  #               Copy-Item -Force $full.Path -Destination $dllDir
+  #             }
+  #           }
+  #         }
+
+  #         Write-Host "Packed nupkgs:"
+  #         Get-ChildItem $pkgDir -Filter *.nupkg | ForEach-Object { Write-Host " - $($_.FullName)" }
+
+  #         Write-Host "Collected dlls:"
+  #         Get-ChildItem $dllDir -Filter *.dll | ForEach-Object { Write-Host " - $($_.FullName)" }
+
+  #     - name: Pack nuspecs (publish version with suffix) for GitHub Packages
+  #       shell: pwsh
+  #       run: |
+  #         $ErrorActionPreference = "Stop"
+
+  #         $outRoot = Join-Path $PWD "out"
+  #         $pkgDir  = Join-Path $outRoot "packages-publish"
+  #         New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
+
+  #         $version = "${{ steps.versions.outputs.publish_version }}"
+
+  #         $nuspecs = @()
+  #         "${{ env.NUSPECS }}" -split "`n" | ForEach-Object {
+  #           $p = $_.Trim()
+  #           if ($p) { $nuspecs += $p }
+  #         }
+
+  #         foreach ($ns in $nuspecs) {
+  #           Write-Host "Packing (publish): $ns (version=$version)"
+  #           nuget pack $ns -Version $version -Properties "Configuration=$env:CONFIGURATION" -OutputDirectory $pkgDir -NonInteractive
+  #         }
+
+  #     - name: Upload artifacts (raw packages + dlls + publish packages)
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: build-output
+  #         path: |
+  #           out/packages-raw/*.nupkg
+  #           out/packages-publish/*.nupkg
+  #           out/dlls/*.dll
+  #         if-no-files-found: error
+
+  # sync_release_and_upload_assets:
+  #   name: Create/update fork release + upload assets (from upstream body)
+  #   runs-on: ubuntu-latest
+  #   needs: [build_and_pack_windows]
+  #   steps:
+  #     - name: Download build artifacts
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: build-output
+  #         path: out
+
+  #     - name: Fetch upstream latest release info (tag + body)
+  #       id: upstream
+  #       env:
+  #         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #       run: |
+  #         set -euo pipefail
+  #         r="$(gh api "repos/${UPSTREAM_REPO}/releases/latest")"
+  #         tag="$(printf '%s' "$r" | jq -r '.tag_name')"
+  #         body="$(printf '%s' "$r" | jq -r '.body // ""')"
+  #         if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+  #           echo "Upstream latest release has no tag_name." >&2
+  #           exit 1
+  #         fi
+
+  #         echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  #         # Save body for release creation
+  #         mkdir -p meta
+  #         printf '%s' "$body" > meta/upstream-body.md
+
+  #     - name: Create release in fork if missing (keep upstream body)
+  #       id: release
+  #       env:
+  #         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #       run: |
+  #         set -euo pipefail
+  #         tag="${{ steps.upstream.outputs.tag }}"
+
+  #         if gh release view "$tag" >/dev/null 2>&1; then
+  #           echo "exists=true" >> "$GITHUB_OUTPUT"
+  #           echo "Release already exists: $tag"
+  #         else
+  #           echo "exists=false" >> "$GITHUB_OUTPUT"
+  #           echo "Creating release: $tag"
+
+  #           # Create tag implicitly via release creation.
+  #           # We attach upstream body.
+  #           gh release create "$tag" \
+  #             --title "$tag" \
+  #             --notes-file meta/upstream-body.md \
+  #             --latest
+  #         fi
+
+  #     - name: Upload/replace assets (raw nupkgs + dlls) to fork release
+  #       env:
+  #         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #       run: |
+  #         set -euo pipefail
+  #         tag="${{ steps.upstream.outputs.tag }}"
+
+  #         # Replace assets if already present
+  #         shopt -s nullglob
+  #         assets=( out/packages-raw/*.nupkg out/dlls/*.dll )
+  #         if [ ${#assets[@]} -eq 0 ]; then
+  #           echo "No assets found to upload." >&2
+  #           exit 1
+  #         fi
+
+  #         gh release upload "$tag" "${assets[@]}" --clobber
+
+  # publish_github_packages:
+  #   name: Publish nupkgs to GitHub Packages
+  #   runs-on: windows-latest
+  #   needs: [build_and_pack_windows]
+  #   steps:
+  #     - name: Download build artifacts
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: build-output
+  #         path: out
+
+  #     - name: Setup .NET
+  #       uses: actions/setup-dotnet@v4
+  #       with:
+  #         dotnet-version: |
+  #           8.0.x
+
+  #     - name: Add GitHub Packages NuGet source
+  #       shell: pwsh
+  #       run: |
+  #         $ErrorActionPreference = "Stop"
+  #         $owner = "${{ github.repository_owner }}"
+  #         dotnet nuget remove source github 2>$null | Out-Null
+  #         dotnet nuget add source "https://nuget.pkg.github.com/$owner/index.json" `
+  #           --name github `
+  #           --username "$owner" `
+  #           --password "${{ secrets.GITHUB_TOKEN }}" `
+  #           --store-password-in-clear-text
+
+  #     - name: Push publish packages (suffix version)
+  #       shell: pwsh
+  #       run: |
+  #         $ErrorActionPreference = "Stop"
+  #         $pkgs = Get-ChildItem -Path out\packages-publish -Filter *.nupkg
+  #         if (-not $pkgs) { throw "No publish packages found." }
+
+  #         foreach ($p in $pkgs) {
+  #           Write-Host "Pushing $($p.FullName)"
+  #           dotnet nuget push $p.FullName --source github --skip-duplicate
+  #         }

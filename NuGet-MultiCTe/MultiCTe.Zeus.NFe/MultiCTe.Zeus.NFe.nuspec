@@ -15,7 +15,7 @@
     <tags>nfc-e nf-e nfce nfe</tags>
     <dependencies>
       <group targetFramework=".NETFramework4.7.2" />
-      <group targetFramework=".NETFramework4.8.1" />
+      <group targetFramework=".NETFramework4.8" />
       <group targetFramework="net8.0" />
       <group targetFramework=".NETStandard2.0" />
     </dependencies>
@@ -66,13 +66,13 @@
     <!-- net481 -->
     <file src="..\..\DFe.Classes\bin\Release\net481\DFe.Classes.dll"
       target="lib/net481/DFe.Classes.dll" />
-    <file src="..\..\DFe.Utils\bin\Release\net481\DFe.Utils.dll" target="lib/net481/DFe.Utils.dll" />
-    <file src="..\..\DFe.Wsdl\bin\Release\net481\DFe.Wsdl.dll" target="lib/net481/DFe.Wsdl.dll" />
-    <file src="..\..\NFe.Classes\bin\Release\net481\NFe.Classes.dll"
-      target="lib/net481/NFe.Classes.dll" />
-    <file src="..\..\NFe.Servicos\bin\Release\net481\NFe.Servicos.dll"
-      target="lib/net481/NFe.Servicos.dll" />
-    <file src="..\..\NFe.Utils\bin\Release\net481\NFe.Utils.dll" target="lib/net481/NFe.Utils.dll" />
-    <file src="..\..\NFe.Wsdl\bin\Release\net481\NFe.Wsdl.dll" target="lib/net481/NFe.Wsdl.dll" />
+    <file src="..\..\DFe.Utils\bin\Release\net48\DFe.Utils.dll" target="lib/net48/DFe.Utils.dll" />
+    <file src="..\..\DFe.Wsdl\bin\Release\net48\DFe.Wsdl.dll" target="lib/net48/DFe.Wsdl.dll" />
+    <file src="..\..\NFe.Classes\bin\Release\net48\NFe.Classes.dll"
+      target="lib/net48/NFe.Classes.dll" />
+    <file src="..\..\NFe.Servicos\bin\Release\net48\NFe.Servicos.dll"
+      target="lib/net48/NFe.Servicos.dll" />
+    <file src="..\..\NFe.Utils\bin\Release\net48\NFe.Utils.dll" target="lib/net48/NFe.Utils.dll" />
+    <file src="..\..\NFe.Wsdl\bin\Release\net48\NFe.Wsdl.dll" target="lib/net48/NFe.Wsdl.dll" />
   </files>
 </package>

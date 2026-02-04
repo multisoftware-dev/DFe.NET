@@ -34,7 +34,7 @@
         <dependency id="FastReport.OpenSource.Export.PdfSimple" version="2022.2.2" />
       </group>
 
-      <group targetFramework=".NETFramework4.8.1">
+      <group targetFramework=".NETFramework4.8">
         <dependency id="MultiCTe.Zeus.NFe" version="$version$" />
         <dependency id="FastReport.OpenSource" version="2022.2.2" />
         <dependency id="FastReport.OpenSource.Export.PdfSimple" version="2022.2.2" />
@@ -62,9 +62,9 @@
       target="lib/net472/NFe.Danfe.OpenFast.dll" />
 
     <!-- net481 -->
-    <file src="..\..\NFe.Danfe.Base\bin\Release\net481\NFe.Danfe.Base.dll"
-      target="lib/net481/NFe.Danfe.Base.dll" />
-    <file src="..\..\NFe.Danfe.OpenFast\bin\Release\net481\NFe.Danfe.OpenFast.dll"
-      target="lib/net481/NFe.Danfe.OpenFast.dll" />
+    <file src="..\..\NFe.Danfe.Base\bin\Release\net48\NFe.Danfe.Base.dll"
+      target="lib/net48/NFe.Danfe.Base.dll" />
+    <file src="..\..\NFe.Danfe.OpenFast\bin\Release\net48\NFe.Danfe.OpenFast.dll"
+      target="lib/net48/NFe.Danfe.OpenFast.dll" />
   </files>
 </package>
