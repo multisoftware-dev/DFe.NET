@@ -413,7 +413,7 @@ jobs:
           dotnet pack -c Release --no-build -p:NuspecProperties=version=$v -p:PackageVersion=$v -o .\out\packages ".\NuGet-MultiCTe\MultiCTe.Zeus.NFe\MultiCTe.Zeus.NFe.csproj"
           dotnet pack -c Release --no-build -p:NuspecProperties=version=$v -p:PackageVersion=$v -o .\out\packages ".\NuGet-MultiCTe\MultiCTe.Zeus.Danfe.Nativo\MultiCTe.Zeus.Danfe.Nativo.csproj"
           dotnet pack -c Release --no-build -p:NuspecProperties=version=$v -p:PackageVersion=$v -o .\out\packages ".\NuGet-MultiCTe\MultiCTe.Zeus.Danfe.OpenFast\MultiCTe.Zeus.Danfe.OpenFast.csproj"
-      - name: Collect release assets (nupkg + referenced dlls from nuspec)
+      - name: Collect release assets (nupkg + referenced dlls from nuspec; dlls grouped by name/tfm)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -421,12 +421,21 @@ jobs:
           $assets = Join-Path $PWD "out\release-assets"
           New-Item -ItemType Directory -Force -Path $assets | Out-Null
 
-          # 1) Collect nupkgs produced by dotnet pack (you used -o ${{ github.workspace }})
-          Get-ChildItem -Path ".\out\packages" -Filter *.nupkg | % {
+          # 1) Collect nupkgs
+          Get-ChildItem -Path ".\out\packages" -Filter *.nupkg | ForEach-Object {
             Copy-Item -Force $_.FullName -Destination $assets
           }
 
-          # 2) Collect DLLs referenced by nuspec <files><file src="...">
+          function Get-TfmFromPath([string]$p) {
+            # Typical layout: ...\bin\Release\<tfm>\X.dll  OR ...\bin\Release\<tfm>\publish\X.dll
+            $norm = $p -replace '/', '\'
+            $m = [regex]::Match($norm, '\\bin\\Release\\([^\\]+)\\')
+            if ($m.Success) { return $m.Groups[1].Value }
+            return "unknown"
+          }
+
+          # 2) Collect DLLs referenced by nuspec <files><file src="..."> into:
+          #    <assets>\<dll-name-without-ext>\<tfm>\<full-dll-name>
           $nuspecs = @(
             "NuGet-MultiCTe\MultiCTe.Zeus.NFe\MultiCTe.Zeus.NFe.nuspec",
             "NuGet-MultiCTe\MultiCTe.Zeus.Danfe.Nativo\MultiCTe.Zeus.Danfe.Nativo.nuspec",
@@ -440,27 +449,43 @@ jobs:
 
             [xml]$x = Get-Content $ns -Raw
             $nsm = New-Object System.Xml.XmlNamespaceManager($x.NameTable)
-            $nsm.AddNamespace("n", $x.DocumentElement.NamespaceURI)
-
-            $nodes = $x.SelectNodes("//n:files/n:file", $nsm)
-            if ($nodes.Count -eq 0) {
-              $nodes = $x.SelectNodes("//files/file")  # fallback (no namespace)
+            if ($x.DocumentElement.NamespaceURI) {
+              $nsm.AddNamespace("n", $x.DocumentElement.NamespaceURI)
             }
+
+            $nodes = @()
+            if ($x.DocumentElement.NamespaceURI) {
+              $nodes = $x.SelectNodes("//n:files/n:file", $nsm)
+            }
+            if (-not $nodes -or $nodes.Count -eq 0) {
+              $nodes = $x.SelectNodes("//files/file") # fallback (no namespace)
+            }
+
             foreach ($node in $nodes) {
               $src = $node.GetAttribute("src")
               if ([string]::IsNullOrWhiteSpace($src)) { continue }
 
-              # src is relative to nuspec folder
-              $full = Resolve-Path (Join-Path $nsDir $src) -ErrorAction Stop
+              # Expand wildcards relative to nuspec folder
+              $pattern = Join-Path $nsDir $src
+              $matches = Get-ChildItem -Path $pattern -File -ErrorAction Stop
 
-              if ($full.Path.ToLower().EndsWith(".dll")) {
-                Copy-Item -Force $full.Path -Destination $assets
+              foreach ($m in $matches) {
+                if (-not $m.FullName.ToLower().EndsWith(".dll")) { continue }
+
+                $dllName = $m.Name
+                $dllBase = [IO.Path]::GetFileNameWithoutExtension($dllName)
+                $tfm = Get-TfmFromPath $m.FullName
+
+                $destDir = Join-Path $assets (Join-Path $dllBase (Join-Path $tfm ""))
+                New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+
+                Copy-Item -Force $m.FullName -Destination (Join-Path $destDir $dllName)
               }
             }
           }
 
           Write-Host "Assets collected:"
-          Get-ChildItem $assets | ForEach-Object { Write-Host " - $($_.Name)" }
+          Get-ChildItem $assets -Recurse -File | ForEach-Object { Write-Host " - $($_.FullName.Replace($assets,'').TrimStart('\'))" }
 
       - name: Upload build artifacts for release upload
         uses: actions/upload-artifact@v4

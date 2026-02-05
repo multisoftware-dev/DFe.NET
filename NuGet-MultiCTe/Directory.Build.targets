@@ -7,9 +7,12 @@
       Condition="'$(IsMultiTarget)' == 'true' and $(TargetFrameworks.Contains('net462'))">true</IsNet462MultiTarget>
     <IsNet6MultiTarget
       Condition="'$(IsMultiTarget)' == 'true' and $(TargetFrameworks.Contains('net6.0'))">true</IsNet6MultiTarget>
+    <IsNet6MultiTargetWindows
+      Condition="'$(IsMultiTarget)' == 'true' and $(TargetFrameworks.Contains('net6.0')) and $(TargetFrameworks.Contains('-windows'))">
+      true</IsNet6MultiTargetWindows>
 
     <IsExcludedProject
-      Condition="$(MSBuildProjectName.Contains('AppTeste')) Or $(MSBuildProjectName.Contains('.Testes')) Or $(MSBuildProjectName.EndsWith('.App'))">
+      Condition="$(MSBuildProjectName.Contains('AppTeste')) Or $(MSBuildProjectName.Contains('.Testes')) Or $(MSBuildProjectName.EndsWith('.App')) or '$(MSBuildProjectName)' == 'NFe.Wsdl'">
       true</IsExcludedProject>
 
     <IsDanfeProject Condition="$(MSBuildProjectName.StartsWith('NFe.Danfe.'))">true</IsDanfeProject>
@@ -19,23 +22,39 @@
     <TargetFrameworks>$(TargetFrameworks);$(AdditionalNetFramework)</TargetFrameworks>
   </PropertyGroup>
 
-  <!-- net462 projects -->
   <PropertyGroup
-    Condition="'$(IsNet462MultiTarget)' == 'true' and '$(MSBuildProjectName)' != 'NFe.Wsdl' and '$(IsExcludedProject)' != 'true'">
+    Condition="'$(IsMultiTarget)' == 'true' and '$(IsExcludedProject)' != 'true' and '$(IsNet462MultiTarget)' == 'true'">
+    <TargetFrameworks>$(TargetFrameworks);$(AdditionalNetFramework)</TargetFrameworks>
+  </PropertyGroup>
+
+  <PropertyGroup
+    Condition="'$(IsMultiTarget)' == 'true' and '$(IsExcludedProject)' != 'true' and '$(IsNet6MultiTarget)' == 'true'">
+    <TargetFrameworks>$(TargetFrameworks);$(AdditionalNet)</TargetFrameworks>
+  </PropertyGroup>
+
+  <PropertyGroup
+    Condition="'$(IsMultiTarget)' == 'true' and '$(IsExcludedProject)' != 'true' and '$(IsNet6MultiTargetWindows)' == 'true'">
+    <TargetFrameworks>$(TargetFrameworks);$(AdditionalNetWindows)</TargetFrameworks>
+  </PropertyGroup>
+
+
+  <!-- <PropertyGroup
+    Condition="'$(IsNet462MultiTarget)' == 'true' and '$(MSBuildProjectName)' != 'NFe.Wsdl' and
+  '$(IsExcludedProject)' != 'true'">
     <TargetFrameworks Condition="'$(IsDanfeProject)' == 'true'">
       $(TargetFrameworks);$(AdditionalNetFramework);$(AdditionalNetWindows)</TargetFrameworks>
     <TargetFrameworks Condition="'$(IsDanfeProject)' != 'true'">
       $(TargetFrameworks);$(AdditionalNetFramework);$(AdditionalNet)</TargetFrameworks>
   </PropertyGroup>
 
-  <!-- net6 projects (not net462) -->
   <PropertyGroup
-    Condition="'$(IsNet6MultiTarget)' == 'true' and '$(MSBuildProjectName)' != 'NFe.Wsdl' and '$(IsExcludedProject)' != 'true' and '$(IsNet462MultiTarget)' != 'true'">
+    Condition="'$(IsNet6MultiTarget)' == 'true' and '$(MSBuildProjectName)' != 'NFe.Wsdl' and
+  '$(IsExcludedProject)' != 'true' and '$(IsNet462MultiTarget)' != 'true'">
     <TargetFrameworks Condition="'$(IsDanfeProject)' == 'true'">
       $(TargetFrameworks);$(AdditionalNetWindows)</TargetFrameworks>
     <TargetFrameworks Condition="'$(IsDanfeProject)' != 'true'">
       $(TargetFrameworks);$(AdditionalNet)</TargetFrameworks>
-  </PropertyGroup>
+  </PropertyGroup> -->
 
   <ItemGroup
     Condition="'$(MSBuildProjectName)' == 'NFe.Servicos' and '$(TargetFramework)' == 'net8.0'">

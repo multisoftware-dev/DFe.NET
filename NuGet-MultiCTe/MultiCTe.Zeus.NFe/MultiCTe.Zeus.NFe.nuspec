@@ -64,8 +64,8 @@
     <file src="..\..\NFe.Wsdl\bin\Release\net472\NFe.Wsdl.dll" target="lib/net472/NFe.Wsdl.dll" />
 
     <!-- net481 -->
-    <file src="..\..\DFe.Classes\bin\Release\net481\DFe.Classes.dll"
-      target="lib/net481/DFe.Classes.dll" />
+    <file src="..\..\DFe.Classes\bin\Release\net48\DFe.Classes.dll"
+      target="lib/net48/DFe.Classes.dll" />
     <file src="..\..\DFe.Utils\bin\Release\net48\DFe.Utils.dll" target="lib/net48/DFe.Utils.dll" />
     <file src="..\..\DFe.Wsdl\bin\Release\net48\DFe.Wsdl.dll" target="lib/net48/DFe.Wsdl.dll" />
     <file src="..\..\NFe.Classes\bin\Release\net48\NFe.Classes.dll"
