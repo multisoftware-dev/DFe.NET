@@ -369,6 +369,13 @@ jobs:
           dotnet restore ".\NFe.Danfe.Nativo\NFe.Danfe.Nativo.csproj"
           dotnet restore ".\NFe.Danfe.OpenFast\NFe.Danfe.OpenFast.csproj"
 
+      - name: Restore nuspec projects
+        shell: pwsh
+        run: |
+          dotnet restore ".\NuGet-MultiCTe\MultiCTe.Zeus.NFe\MultiCTe.Zeus.NFe.csproj"
+          dotnet restore ".\NuGet-MultiCTe\MultiCTe.Zeus.Danfe.Nativo\MultiCTe.Zeus.Danfe.Nativo.csproj"
+          dotnet restore ".\NuGet-MultiCTe\MultiCTe.Zeus.Danfe.OpenFast\MultiCTe.Zeus.Danfe.OpenFast.csproj"
+
       # --------------------
       # BUILD (no restore)
       # --------------------
