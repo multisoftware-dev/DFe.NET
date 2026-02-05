@@ -1,3 +1,7 @@
 <Project>
-  <Import Project="NuGet-MultiCTe/Directory.Build.props" Condition="Exists('NuGet-MultiCTe/Directory.Build.props')" />
+  <PropertyGroup Condition="'$(RepoRoot)' == ''">
+    <RepoRoot>$(MSBuildThisFileDirectory)</RepoRoot>
+  </PropertyGroup>
+  <Import Project="NuGet-MultiCTe/Directory.Build.props"
+    Condition="Exists('NuGet-MultiCTe/Directory.Build.props')" />
 </Project>

@@ -40,7 +40,7 @@
   <ItemGroup
     Condition="'$(MSBuildProjectName)' == 'NFe.Servicos' and '$(TargetFramework)' == 'net8.0'">
     <ProjectReference
-      Include="$(MSBuildThisFileDirectory)NFe.Wsdl.Standard\NFe.Wsdl.Standard.csproj" />
+      Include="$(RepoRoot)NFe.Wsdl.Standard\NFe.Wsdl.Standard.csproj" />
   </ItemGroup>
 
 </Project>
