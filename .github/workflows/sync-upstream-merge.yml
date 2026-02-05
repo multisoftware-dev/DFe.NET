@@ -6,6 +6,12 @@ on:
     paths-ignore:
       - ".github/**"
   workflow_dispatch:
+    inputs:
+      target_branch:
+        description: Branch to merge into
+        required: false
+        type: string
+        default: multicte-build
 
 # No pull-requests permission needed.
 permissions:
@@ -19,10 +25,10 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout multicte-build (full history)
+      - name: Checkout ${{ github.event.inputs.target_branch }} (full history)
         uses: actions/checkout@v4
         with:
-          ref: multicte-build
+          ref: ${{ github.event.inputs.target_branch }}
           fetch-depth: 0
           persist-credentials: true
 
@@ -35,17 +41,17 @@ jobs:
           git config user.name "${GITHUB_ACTOR}"
           git config user.email "${GITHUB_ACTOR_ID}+${GITHUB_ACTOR}@users.noreply.github.com"
 
-      - name: Merge master into multicte-build (local)
+      - name: Merge master into ${{ github.event.inputs.target_branch }} (local)
         run: |
-          # Ensure we're on multicte-build
-          git checkout multicte-build
+          # Ensure we're on ${{ github.event.inputs.target_branch }}
+          git checkout ${{ github.event.inputs.target_branch }}
 
           # Merge (creates a merge commit when needed)
           git merge --no-ff --no-edit origin/master || {
-            echo "Merge conflicts. Resolve manually by merging master -> multicte-build yourself."
+            echo "Merge conflicts. Resolve manually by merging master -> ${{ github.event.inputs.target_branch }} yourself."
             exit 1
           }
 
-      - name: Push multicte-build
+      - name: Push to ${{ github.event.inputs.target_branch }}
         run: |
-          git push origin HEAD:multicte-build
+          git push origin HEAD:${{ github.event.inputs.target_branch }}
