@@ -509,13 +509,32 @@ jobs:
           name: release-assets
           path: release-assets
 
+      - name: Create one zip per folder (preserve structure)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd release-assets
+
+          # zip each top-level directory: <dir>.zip
+          for d in */ ; do
+            d="${d%/}"
+            [ -d "$d" ] || continue
+            echo "Zipping $d -> ${d}.zip"
+            (cd "$d" && zip -r "../${d}.zip" .)
+          done
+
+          ls -la *.zip || true
+
       - name: Upload assets to release (replace existing)
         uses: ncipollo/release-action@v1
         with:
           tag: ${{ needs.get_upstream.outputs.upstream_tag }}
           allowUpdates: true
           omitBodyDuringUpdate: true
-          artifacts: 'release-assets/*'
+          artifacts: |
+            release-assets/*.nupkg
+            release-assets/*.zip
           artifactErrorsFailBuild: true
           replacesArtifacts: true
 
