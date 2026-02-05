@@ -1,0 +1,59 @@
+name: Sync master -> multicte-build (PR + auto-merge)
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - ".github/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout multicte-build (full history)
+        uses: actions/checkout@v4
+        with:
+          ref: multicte-build
+          fetch-depth: 0
+
+      - name: Fetch master
+        run: |
+          git fetch origin master:refs/remotes/origin/master
+
+      - name: Merge master into multicte-build (local)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git merge --no-ff --no-edit origin/master || {
+            echo "Merge conflicts. Resolve manually."
+            exit 1
+          }
+
+      - name: Create/Update PR
+        id: cpr
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          base: multicte-build
+          branch: bot/sync-master-to-multicte-build
+          title: "sync: master -> multicte-build"
+          body: |
+            Automated sync PR from `master` into `multicte-build`.
+            - Source: `master` (upstream-synced)
+            - Target: `multicte-build` (overlay + publish)
+          commit-message: "sync: master -> multicte-build"
+          labels: |
+            automation
+            sync
+      - name: Enable PR auto-merge
+        if: ${{ steps.cpr.outputs.pull-request-number != '' }}
+        uses: peter-evans/enable-pull-request-automerge@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          pull-request-number: ${{ steps.cpr.outputs.pull-request-number }}
+          merge-method: merge
