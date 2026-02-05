@@ -1,0 +1,86 @@
+name: Create Boards item on release published
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+env:
+  AZURE_BOARDS_ORG: ${{ vars.AZURE_BOARDS_ORG }}
+  AZURE_BOARDS_PROJECT: ${{ vars.AZURE_BOARDS_PROJECT }}
+  AZURE_BOARDS_TEAM: ${{ vars.AZURE_BOARDS_TEAM }}
+  AZURE_BOARDS_WORK_ITEM_TYPE: ${{ vars.AZURE_BOARDS_WORK_ITEM_TYPE }}
+
+jobs:
+  create_work_item:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create work item (Boards)
+        env:
+          AZURE_DEVOPS_EXT_PAT: ${{ secrets.AZURE_DEVOPS_WORKITEMS_PAT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          az extension add --name azure-devops --only-show-errors >/dev/null 2>&1 || true
+          az devops configure --defaults organization="${AZURE_BOARDS_ORG}" project="${AZURE_BOARDS_PROJECT}"
+
+          tag="${{ github.event.release.tag_name }}"
+          release_url="${{ github.event.release.html_url }}"
+          repo_url="${{ github.server_url }}/${{ github.repository }}"
+          packages_url="${{ github.server_url }}/${{ github.repository_owner }}?tab=packages"
+
+          # Extract stored nuget version from release body marker (if you keep it)
+          body="${{ github.event.release.body }}"
+          nuget_version="$(echo "$body" | sed -n 's/.*multicte-nuget-version:[[:space:]]*\([^[:space:]]*\)[[:space:]]*.*/\1/p' | head -n1)"
+          if [ -z "$nuget_version" ]; then
+            nuget_version="$tag"
+          fi
+
+          iteration_id="$(az boards iteration team list \
+            --team "${AZURE_BOARDS_TEAM}" \
+            --timeframe current \
+            --query "[0].id" -o tsv)"
+          iteration_path="$(az boards iteration show --id "$iteration_id" --query "path" -o tsv)"
+
+          feed_url="https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
+          packages_list="MultiCTe.Zeus.NFe, MultiCTe.Zeus.Danfe.Nativo, MultiCTe.Zeus.Danfe.OpenFast"
+
+          title="Update MultiCTe consumers to NuGet ${nuget_version} (release ${tag})"
+
+          description="$(cat <<EOF
+          <h2>Release published</h2>
+          <p>Release <b>${tag}</b> has been published. Consumers must update to <b>${nuget_version}</b>.</p>
+
+          <h3>Packages</h3>
+          <ul><li>${packages_list}</li></ul>
+
+          <h3>NuGet feed (GitHub Packages)</h3>
+          <p><code>${feed_url}</code></p>
+
+          <h2>Actions</h2>
+          <ol>
+            <li>Update package references to <b>${nuget_version}</b>.</li>
+            <li>Restore/build (net472/net48/net8 as applicable).</li>
+            <li>Run smoke tests for impacted areas.</li>
+            <li>Open PR(s) with the package bump.</li>
+          </ol>
+
+          <h2>Links</h2>
+          <ul>
+            <li><a href="${release_url}">GitHub Release</a></li>
+            <li><a href="${packages_url}">GitHub Packages</a></li>
+            <li><a href="${repo_url}">Repository</a></li>
+          </ul>
+          EOF
+          )"
+          description="${description//$'\n'/}"
+
+          az boards work-item create \
+            --type "${AZURE_BOARDS_WORK_ITEM_TYPE}" \
+            --title "$title" \
+            --description "$description" \
+            --fields \
+              "System.IterationPath=$iteration_path" \
+              "System.Tags=github;automation;nuget;multicte;release;${nuget_version}"
