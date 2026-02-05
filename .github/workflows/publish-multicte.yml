@@ -5,7 +5,7 @@ on:
     branches: [multicte-build]
   workflow_dispatch:
     inputs:
-      path:
+      version_suffix:
         description: 'Digits appended to the last version block (HHmm). Example: 001 -> ...HHmm001'
         required: false
         default: ''
@@ -15,94 +15,31 @@ permissions:
   packages: write # publish to GitHub Packages NuGet
   actions: read
 
+concurrency:
+  group: multicte-build
+  cancel-in-progress: false
+
 env:
   CONFIGURATION: Release
+  NUGET_SOURCE_URL: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
 
   # Upstream GitHub repo that defines the canonical releases
   UPSTREAM_REPO: ZeusAutomacao/DFe.NET
-
-  # Nuspecs that you want to pack
-  NUSPECS: |
-    NuGet-MultiCTe/specs/MultiCTe.Zeus.NFe.nuspec
-    NuGet-MultiCTe/specs/MultiCTe.Zeus.Danfe.OpenFast.nuspec
-    NuGet-MultiCTe/specs/MultiCTe.Zeus.Danfe.Nativo.nuspec
+  DOTNET_VERSION: 8.0.x
 
 jobs:
-  versioning:
-    name: Get upstream latest release + compute version
+  get_upstream:
+    name: Get upstream latest release + compute versions
     runs-on: ubuntu-latest
 
-    # expose outputs to other jobs via needs.get_upstream_release.outputs.*
     outputs:
-      upstream_tag: ${{ steps.upstream.outputs.upstream_tag }}
-      upstream_version: ${{ steps.upstream.outputs.upstream_version }}
-      final_version: ${{ steps.upstream.outputs.final_version }}
+      upstream_tag: ${{ steps.v.outputs.upstream_tag }}
+      upstream_version: ${{ steps.v.outputs.upstream_version }}
+      nuget_version: ${{ steps.v.outputs.nuget_version }}
 
     steps:
-      - name: Fetch upstream latest release (JS)
-        id: upstream
+      - id: v
         uses: actions/github-script@v7
-        with:
-          script: |
-            // CONFIG
-            const upstreamRepo = process.env.UPSTREAM_REPO; // e.g. "ZeusAutomacao/DFe.NET"
-            if (!upstreamRepo || !upstreamRepo.includes("/")) {
-              core.setFailed("UPSTREAM_REPO must be set like 'owner/repo'.");
-              return;
-            }
-            const [owner, repo] = upstreamRepo.split("/");
-
-            // Optional "path" input (only exists on workflow_dispatch runs)
-            // We'll append digits from it to the *last numeric block* of the version.
-            const rawPath = (context.payload?.inputs?.path ?? "").trim();
-
-            // Fetch latest upstream release
-            const rel = await github.rest.repos.getLatestRelease({ owner, repo });
-            const tag = rel.data.tag_name;
-
-            if (!tag) {
-              core.setFailed("Upstream latest release has no tag_name.");
-              return;
-            }
-
-            // Upstream uses yyyy.MM.dd.HHmm (4 blocks). Strip leading "v" if present.
-            let baseVersion = String(tag).trim();
-            if (baseVersion.startsWith("v")) baseVersion = baseVersion.substring(1);
-
-            const parts = baseVersion.split(".");
-            if (parts.length !== 4 || parts.some(p => !/^\d+$/.test(p))) {
-              core.setFailed(`Upstream tag '${tag}' is not a 4-part numeric version (yyyy.MM.dd.HHmm).`);
-              return;
-            }
-
-            let finalVersion = baseVersion;
-
-            // Append only digits from "path" to the last block
-            // Example: base 2026.01.19.1935 + path "001" => 2026.01.19.1935001
-            // If path contains non-digits, we strip them.
-            const suffixDigits = rawPath.replace(/\D+/g, "");
-            if (suffixDigits.length > 0) {
-              parts[3] = parts[3] + suffixDigits;
-              finalVersion = parts.join(".");
-            }
-
-            core.setOutput("upstream_tag", tag);
-            core.setOutput("upstream_version", baseVersion);
-            core.setOutput("final_version", finalVersion);
-  release_notes:
-    name: Build release body (PRs + commits) from upstream
-    runs-on: ubuntu-latest
-    needs: [versioning]
-
-    outputs:
-      release_body_md: ${{ steps.notes.outputs.release_body_md }}
-
-    steps:
-      - name: Build markdown release notes (JS)
-        id: notes
-        uses: actions/github-script@v7
-        env:
-          UPSTREAM_REPO: ${{ env.UPSTREAM_REPO }} # keep the same env you set at workflow-level
         with:
           script: |
             const upstreamRepo = process.env.UPSTREAM_REPO;
@@ -112,352 +49,494 @@ jobs:
             }
             const [owner, repo] = upstreamRepo.split("/");
 
-            const currentTag = `${{ needs.versioning.outputs.upstream_tag }}`;
-            if (!currentTag) {
-              core.setFailed("Missing upstream_tag from previous job.");
+            // suffix comes only from workflow_dispatch input
+            const suffixRaw = String(context.payload?.inputs?.version_suffix ?? "").trim();
+            const suffixDigits = suffixRaw.replace(/\D+/g, ""); // keep digits only
+
+            const releases = await github.paginate(
+              github.rest.repos.listReleases,
+              { owner, repo, per_page: 100 }
+            );
+
+            const stable = releases.find(r => r.draft === false && r.prerelease === false);
+            if (!stable) {
+              core.setFailed("No stable upstream release found (non-draft, non-prerelease).");
               return;
             }
 
-            // Helper: paginate
+            const tag = stable.tag_name;
+            if (!tag) {
+              core.setFailed("Upstream stable release has no tag_name.");
+              return;
+            }
+
+            let version = String(tag).trim();
+            if (version.startsWith("v")) version = version.substring(1);
+
+            const parts = version.split(".");
+            if (parts.length !== 4 || parts.some(p => !/^\d+$/.test(p))) {
+              core.setFailed(`Upstream tag '${tag}' is not a 4-part numeric version (yyyy.MM.dd.HHmm).`);
+              return;
+            }
+
+            const upstreamVersion = parts.join(".");
+
+            // SUFFIX: append digits to last numeric block (HHmm -> HHmmNNN)
+            let nugetVersion = upstreamVersion;
+            if (suffixDigits.length > 0) {
+              parts[3] = parts[3] + suffixDigits;
+              nugetVersion = parts.join(".");
+            }
+
+            core.setOutput("upstream_tag", tag);
+            core.setOutput("upstream_version", upstreamVersion);
+            core.setOutput("nuget_version", nugetVersion);
+
+            core.notice(`Upstream tag: ${tag}`);
+            core.notice(`Upstream version: ${upstreamVersion}`);
+            core.notice(`NuGet version (with optional suffix): ${nugetVersion}`);
+  upsert_release:
+    name: Create draft / Update existing fork release (suffix-aware)
+    runs-on: ubuntu-latest
+    needs: [get_upstream]
+    outputs:
+      exists: ${{ steps.compute.outputs.exists }}
+      stored_nuget_version: ${{ steps.compute.outputs.stored_nuget_version }}
+
+    steps:
+      - name: Compute release body + marker (single API read path)
+        id: compute
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const upstreamRepo = process.env.UPSTREAM_REPO;
+            if (!upstreamRepo || !upstreamRepo.includes("/")) {
+              core.setFailed("UPSTREAM_REPO must be set like 'owner/repo'.");
+              return;
+            }
+            const [upOwner, upRepo] = upstreamRepo.split("/");
+
+            const upstreamTag = `${{ needs.get_upstream.outputs.upstream_tag }}`;
+            const upstreamVersion = `${{ needs.get_upstream.outputs.upstream_version }}`;
+            const nugetVersion = `${{ needs.get_upstream.outputs.nuget_version }}`;
+            const branch = "multicte-build";
+
+            if (!upstreamTag) {
+              core.setFailed("Missing upstream_tag.");
+              return;
+            }
+
+            const markerRe = /<!--\s*multicte-nuget-version:\s*([^\s]+)\s*-->/i;
+            const markerLine = `<!-- multicte-nuget-version: ${nugetVersion} -->`;
+
             async function paginate(method, params) {
               return await github.paginate(method, { ...params, per_page: 100 });
             }
+            function isGithubOnly(files) {
+              return files.length > 0 && files.every(f => f.startsWith(".github/"));
+            }
 
-            // 1) Find the previous release tag (older than currentTag)
-            const releases = await paginate(github.rest.repos.listReleases, { owner, repo });
-            const idx = releases.findIndex(r => r.tag_name === currentTag);
-            if (idx === -1) {
-              core.setFailed(`Could not find current tag '${currentTag}' in upstream releases list.`);
+            // ---- read fork release ONCE (if exists)
+            let forkRelease = null;
+            try {
+              const rel = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag: upstreamTag
+              });
+              forkRelease = rel.data;
+            } catch (e) {
+              if (e.status !== 404) throw e;
+            }
+
+            const exists = !!forkRelease;
+            core.setOutput("exists", exists ? "true" : "false");
+
+            const existingBody = forkRelease?.body ?? "";
+            const m = existingBody.match(markerRe);
+            core.setOutput("stored_nuget_version", m ? m[1] : "");
+
+            // ---- CASE A: missing release => build upstream notes
+            if (!exists) {
+              const releases = await paginate(github.rest.repos.listReleases, { owner: upOwner, repo: upRepo });
+              const idx = releases.findIndex(r => r.tag_name === upstreamTag);
+              if (idx === -1) {
+                core.setFailed(`Could not find upstream tag '${upstreamTag}' in upstream releases list.`);
+                return;
+              }
+              const prev = releases[idx + 1];
+              const prevTag = prev?.tag_name ?? null;
+
+              let commits = [];
+              if (prevTag) {
+                const cmp = await github.rest.repos.compareCommits({ owner: upOwner, repo: upRepo, base: prevTag, head: upstreamTag });
+                commits = cmp.data.commits ?? [];
+              } else {
+                const tagRef = await github.rest.git.getRef({ owner: upOwner, repo: upRepo, ref: `tags/${upstreamTag}` });
+                const list = await github.rest.repos.listCommits({ owner: upOwner, repo: upRepo, sha: tagRef.data.object.sha, per_page: 50 });
+                commits = list.data ?? [];
+              }
+
+              const prMap = new Map();
+              const commitSummaries = [];
+              for (const c of commits) {
+                const sha = c.sha;
+                const msg = (c.commit?.message ?? "").split("\n")[0] || "(no message)";
+                commitSummaries.push({ sha, msg });
+
+                try {
+                  const prs = await github.request(
+                    "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls",
+                    { owner: upOwner, repo: upRepo, commit_sha: sha, headers: { accept: "application/vnd.github+json" } }
+                  );
+                  for (const pr of (prs.data ?? [])) {
+                    if (!prMap.has(pr.number)) prMap.set(pr.number, pr);
+                  }
+                } catch {}
+              }
+
+              const prs = Array.from(prMap.values()).sort((a,b) => a.number - b.number);
+
+              const lines = [];
+              lines.push(`# Upstream release ${upstreamTag}`);
+              if (prevTag) lines.push(`**Changes since:** ${prevTag}`);
+              lines.push("");
+              lines.push(`## Pull requests (${prs.length})`);
+              if (prs.length === 0) {
+                lines.push("_No associated PRs found._");
+              } else {
+                for (const pr of prs) {
+                  const user = pr.user?.login ? `@${pr.user.login}` : "";
+                  lines.push(`- [#${pr.number}](${pr.html_url}) ${pr.title} ${user}`.trim());
+                }
+              }
+              lines.push("");
+              const MAX_COMMITS = 200;
+              lines.push(`## Commits (${Math.min(commitSummaries.length, MAX_COMMITS)}${commitSummaries.length > MAX_COMMITS ? "+" : ""})`);
+              for (const c of commitSummaries.slice(0, MAX_COMMITS)) {
+                const short = c.sha.substring(0,7);
+                lines.push(`- \`${short}\` ${c.msg}`);
+              }
+              if (commitSummaries.length > MAX_COMMITS) lines.push(`\n_Commit list truncated at ${MAX_COMMITS} entries._`);
+              lines.push("");
+              lines.push(markerLine);
+
+              core.setOutput("release_body", lines.join("\n"));
               return;
             }
-            const prev = releases[idx + 1]; // listReleases returns newest-first
-            const previousTag = prev?.tag_name ?? null;
 
-            // 2) Collect commits in the range (previousTag..currentTag) if previousTag exists.
-            // If this is the first release, we’ll just list commits pointed by the tag’s commit (limited).
-            let commits = [];
-            if (previousTag) {
-              const cmp = await github.rest.repos.compareCommits({
-                owner, repo,
-                base: previousTag,
-                head: currentTag
+            // ---- CASE B: release exists => optionally append delta
+            let body = existingBody;
+
+            // always keep marker in sync (or add it)
+            body = body.replace(markerRe, markerLine);
+            if (!markerRe.test(body)) body = `${body}\n\n${markerLine}`;
+
+            // only do delta logic when nugetVersion != upstreamVersion
+            if (nugetVersion !== upstreamVersion) {
+              const tagRef = await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `tags/${upstreamTag}`
               });
-
-              // compareCommits returns up to 250 commits depending on API; for huge ranges, this is limited.
-              commits = cmp.data.commits ?? [];
-            } else {
-              // Fallback: list commits from the tag commit (shallow, best-effort)
-              const tagRef = await github.rest.git.getRef({ owner, repo, ref: `tags/${currentTag}` });
               const tagSha = tagRef.data.object.sha;
 
-              const list = await github.rest.repos.listCommits({
-                owner, repo,
-                sha: tagSha,
-                per_page: 50
+              const br = await github.rest.repos.getBranch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                branch
               });
-              commits = list.data ?? [];
-            }
+              const headSha = br.data.commit.sha;
 
-            // 3) For each commit, try to find associated PR(s)
-            // This endpoint requires the "groot-preview" header historically; GitHub now generally supports it,
-            // but we'll include it defensively.
-            const prMap = new Map(); // key: PR number, value: pr object
-            const commitSummaries = [];
+              const cmpFork = await github.rest.repos.compareCommits({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                base: tagSha,
+                head: headSha
+              });
 
-            for (const c of commits) {
-              const sha = c.sha;
-              const msg = (c.commit?.message ?? "").split("\n")[0] || "(no message)";
-              commitSummaries.push({ sha, msg, author: c.commit?.author?.name ?? null });
+              const commitsFork = cmpFork.data.commits ?? [];
+              const kept = [];
 
-              try {
-                const prs = await github.request(
-                  "GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls",
-                  {
-                    owner, repo,
-                    commit_sha: sha,
-                    headers: { accept: "application/vnd.github+json" }
-                  }
-                );
+              for (const c of commitsFork.slice(0, MAX)) {
+                const full = await github.rest.repos.getCommit({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: c.sha
+                });
 
-                for (const pr of (prs.data ?? [])) {
-                  if (!prMap.has(pr.number)) prMap.set(pr.number, pr);
+                const files = (full.data.files ?? []).map(f => f.filename);
+                if (files.length === 0) { kept.push(c); continue; }
+                if (!isGithubOnly(files)) kept.push(c);
+              }
+
+              if (kept.length > 0) {
+                const delta = [];
+                delta.push(`## MultiCTe rebuild ${nugetVersion}`);
+                delta.push("");
+                delta.push(`Commits after fork release \`${upstreamTag}\` on \`${branch}\` (excluding \`.github/**\` only commits):`);
+                delta.push("");
+                for (const c of kept) {
+                  const short = c.sha.substring(0,7);
+                  const msg = (c.commit?.message ?? "").split("\n")[0] || "(no message)";
+                  const url = `https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${c.sha}`;
+                  delta.push(`- [\`${short}\`](${url}) ${msg}`);
                 }
-              } catch (e) {
-                // Not fatal: not every commit is associated with a PR (direct pushes, merge commits, etc.)
+                delta.push("");
+                body = `${body}\n\n${delta.join("\n")}`;
               }
             }
 
-            const prs = Array.from(prMap.values())
-              .sort((a, b) => a.number - b.number);
+            core.setOutput("release_body", body.trim() + "\n");
 
-            // 4) Build markdown
-            const lines = [];
-            lines.push(`# Upstream release ${currentTag}`);
-            if (previousTag) lines.push(`**Changes since:** ${previousTag}`);
-            lines.push("");
+      - name: Create draft release (only if missing)
+        if: ${{ steps.compute.outputs.exists != 'true' }}
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ needs.get_upstream.outputs.upstream_tag }}
+          name: ${{ needs.get_upstream.outputs.upstream_tag }}
+          body: ${{ steps.compute.outputs.release_body }}
+          draft: true
+          allowUpdates: false
+      - name: Update release body (only if exists)
+        if: ${{ steps.compute.outputs.exists == 'true' }}
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ needs.get_upstream.outputs.upstream_tag }}
+          name: ${{ needs.get_upstream.outputs.upstream_tag }}
+          body: ${{ steps.compute.outputs.release_body }}
+          allowUpdates: true
+          omitBodyDuringUpdate: false
 
-            // PR section
-            lines.push(`## Pull requests (${prs.length})`);
-            if (prs.length === 0) {
-              lines.push("_No associated PRs found (may be direct commits or squash merges without association)._");
-            } else {
-              for (const pr of prs) {
-                const title = (pr.title ?? "").trim();
-                const number = pr.number;
-                const url = pr.html_url;
-                const user = pr.user?.login ? `@${pr.user.login}` : "";
-                lines.push(`- [#${number}](${url}) ${title} ${user}`.trim());
+  build_required_projects:
+    name: Build required projects (Windows 2022)
+    runs-on: windows-2022
+    needs: [get_upstream, upsert_release]
+    # Run only when we are rebuilding (suffix differs from upstream OR differs from last stored nuget_version)
+    # You already compute this condition in prior jobs; wire it here.
+    # Example condition (adapt to your real outputs):
+    if: >-
+      ${{ needs.get_upstream.outputs.nuget_version != needs.get_upstream.outputs.upstream_version ||
+      needs.get_upstream.outputs.nuget_version != needs.upsert_release.outputs.stored_nuget_version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Versao
+        shell: pwsh
+        run: echo "${{ needs.get_upstream.outputs.nuget_version }}"
+
+      - name: Setup .NET 8.0.x
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+          cache: true
+          cache-dependency-path: |
+            **/*.csproj
+            **/*.props
+            **/*.targets
+
+      - name: Install .NET Framework dev packs (net472, net48)
+        shell: pwsh
+        run: |
+          choco install netfx-4.7.2-devpack netfx-4.8-devpack -y --no-progress
+
+      # --------------------
+      # RESTORE (explicit)
+      # --------------------
+      - name: Restore Base
+        shell: pwsh
+        run: |
+          dotnet restore ".\DFe.Classes\DFe.Classes.csproj"
+          dotnet restore ".\DFe.Utils\DFe.Utils.csproj"
+          dotnet restore ".\DFe.Wsdl\DFe.Wsdl.csproj"
+
+      - name: Restore NFe
+        shell: pwsh
+        run: |
+          dotnet restore ".\NFe.Classes\NFe.Classes.csproj"
+          dotnet restore ".\NFe.Servicos\NFe.Servicos.csproj"
+          dotnet restore ".\NFe.Utils\NFe.Utils.csproj"
+          dotnet restore ".\NFe.Wsdl\NFe.Wsdl.csproj"
+          dotnet restore ".\NFe.Wsdl.Standard\NFe.Wsdl.Standard.csproj"
+
+      - name: Restore Danfe
+        shell: pwsh
+        run: |
+          dotnet restore ".\NFe.Danfe.Base\NFe.Danfe.Base.csproj"
+          dotnet restore ".\NFe.Danfe.Nativo\NFe.Danfe.Nativo.csproj"
+          dotnet restore ".\NFe.Danfe.OpenFast\NFe.Danfe.OpenFast.csproj"
+
+      # --------------------
+      # BUILD (no restore)
+      # --------------------
+      - name: Build Base
+        shell: pwsh
+        run: |
+          $v = "${{ needs.get_upstream.outputs.nuget_version }}"
+          dotnet build -c Release --no-restore -p:Version=$v ".\DFe.Classes\DFe.Classes.csproj"
+          dotnet build -c Release --no-restore -p:Version=$v ".\DFe.Utils\DFe.Utils.csproj"
+          dotnet build -c Release --no-restore -p:Version=$v ".\DFe.Wsdl\DFe.Wsdl.csproj"
+
+      - name: Build NFe
+        shell: pwsh
+        run: |
+          $v = "${{ needs.get_upstream.outputs.nuget_version }}"
+          dotnet build -c Release --no-restore -p:Version=$v ".\NFe.Classes\NFe.Classes.csproj"
+          dotnet build -c Release --no-restore -p:Version=$v ".\NFe.Servicos\NFe.Servicos.csproj"
+          dotnet build -c Release --no-restore -p:Version=$v ".\NFe.Utils\NFe.Utils.csproj"
+          dotnet build -c Release --no-restore -p:Version=$v ".\NFe.Wsdl\NFe.Wsdl.csproj"
+          dotnet build -c Release --no-restore -p:Version=$v ".\NFe.Wsdl.Standard\NFe.Wsdl.Standard.csproj"
+
+      - name: Build Danfe
+        shell: pwsh
+        run: |
+          $v = "${{ needs.get_upstream.outputs.nuget_version }}"
+          dotnet build -c Release --no-restore -p:Version=$v ".\NFe.Danfe.Base\NFe.Danfe.Base.csproj"
+          dotnet build -c Release --no-restore -p:Version=$v ".\NFe.Danfe.Nativo\NFe.Danfe.Nativo.csproj"
+          dotnet build -c Release --no-restore -p:Version=$v ".\NFe.Danfe.OpenFast\NFe.Danfe.OpenFast.csproj"
+      - name: Pack (dotnet pack via NuspecFile wrappers)
+        shell: pwsh
+        run: |
+          $v = "${{ needs.get_upstream.outputs.nuget_version }}"
+          New-Item -ItemType Directory -Force -Path ".\out\packages" | Out-Null
+
+          dotnet pack -c Release --no-build -p:NuspecProperties=version=$v -p:PackageVersion=$v -o .\out\packages ".\NuGet-MultiCTe\MultiCTe.Zeus.NFe\MultiCTe.Zeus.NFe.csproj"
+          dotnet pack -c Release --no-build -p:NuspecProperties=version=$v -p:PackageVersion=$v -o .\out\packages ".\NuGet-MultiCTe\MultiCTe.Zeus.Danfe.Nativo\MultiCTe.Zeus.Danfe.Nativo.csproj"
+          dotnet pack -c Release --no-build -p:NuspecProperties=version=$v -p:PackageVersion=$v -o .\out\packages ".\NuGet-MultiCTe\MultiCTe.Zeus.Danfe.OpenFast\MultiCTe.Zeus.Danfe.OpenFast.csproj"
+      - name: Collect release assets (nupkg + referenced dlls from nuspec)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $assets = Join-Path $PWD "out\release-assets"
+          New-Item -ItemType Directory -Force -Path $assets | Out-Null
+
+          # 1) Collect nupkgs produced by dotnet pack (you used -o ${{ github.workspace }})
+          Get-ChildItem -Path ".\out\packages" -Filter *.nupkg | % {
+            Copy-Item -Force $_.FullName -Destination $assets
+          }
+
+          # 2) Collect DLLs referenced by nuspec <files><file src="...">
+          $nuspecs = @(
+            "NuGet-MultiCTe\MultiCTe.Zeus.NFe\MultiCTe.Zeus.NFe.nuspec",
+            "NuGet-MultiCTe\MultiCTe.Zeus.Danfe.Nativo\MultiCTe.Zeus.Danfe.Nativo.nuspec",
+            "NuGet-MultiCTe\MultiCTe.Zeus.Danfe.OpenFast\MultiCTe.Zeus.Danfe.OpenFast.nuspec"
+          )
+
+          foreach ($ns in $nuspecs) {
+            if (-not (Test-Path $ns)) { throw "Missing nuspec: $ns" }
+
+            $nsDir = Split-Path -Parent (Resolve-Path $ns)
+
+            [xml]$x = Get-Content $ns -Raw
+            $nsm = New-Object System.Xml.XmlNamespaceManager($x.NameTable)
+            $nsm.AddNamespace("n", $x.DocumentElement.NamespaceURI)
+
+            $nodes = $x.SelectNodes("//n:files/n:file", $nsm)
+            if ($nodes.Count -eq 0) {
+              $nodes = $x.SelectNodes("//files/file")  # fallback (no namespace)
+            }
+            foreach ($node in $nodes) {
+              $src = $node.GetAttribute("src")
+              if ([string]::IsNullOrWhiteSpace($src)) { continue }
+
+              # src is relative to nuspec folder
+              $full = Resolve-Path (Join-Path $nsDir $src) -ErrorAction Stop
+
+              if ($full.Path.ToLower().EndsWith(".dll")) {
+                Copy-Item -Force $full.Path -Destination $assets
               }
             }
-            lines.push("");
+          }
 
-            // Commits section (limit to keep release notes readable)
-            const MAX_COMMITS = 200;
-            lines.push(`## Commits (${Math.min(commitSummaries.length, MAX_COMMITS)}${commitSummaries.length > MAX_COMMITS ? "+" : ""})`);
-            const shown = commitSummaries.slice(0, MAX_COMMITS);
-            for (const c of shown) {
-              const shortSha = c.sha.substring(0, 7);
-              const author = c.author ? ` (${c.author})` : "";
-              lines.push(`- \`${shortSha}\` ${c.msg}${author}`);
-            }
-            if (commitSummaries.length > MAX_COMMITS) {
-              lines.push("");
-              lines.push(`_Commit list truncated at ${MAX_COMMITS} entries._`);
-            }
+          Write-Host "Assets collected:"
+          Get-ChildItem $assets | ForEach-Object { Write-Host " - $($_.Name)" }
 
-            // 5) Output (as a single string)
-            const body = lines.join("\n");
-            core.setOutput("release_body_md", body);
-  # build_and_pack_windows:
-  #   name: Build + Pack (Windows)
-  #   runs-on: windows-2022
-  #   outputs:
-  #     # "raw" version == upstream tag
-  #     upstream_version: ${{ steps.versions.outputs.upstream_version }}
-  #     # publish version is suffixed so NuGet feed can accept it
-  #     publish_version: ${{ steps.versions.outputs.publish_version }}
-  #   steps:
-  #     - name: Install .NET Framework targeting packs
-  #       shell: pwsh
-  #       run: |
-  #         choco install netfx-4.7.2-devpack -y
-  #         choco install netfx-4.8-devpack -y
+      - name: Upload build artifacts for release upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: out/release-assets/*
+          if-no-files-found: error
 
-  #     - name: Checkout
-  #       uses: actions/checkout@v4
-  #       with:
-  #         fetch-depth: 0
+  upload_assets_to_release:
+    name: Upload assets to GitHub Release
+    runs-on: ubuntu-latest
+    needs: [get_upstream, upsert_release, build_required_projects] # adjust to your actual job ids
+    permissions:
+      contents: write
 
-  #     - name: Setup .NET
-  #       uses: actions/setup-dotnet@v4
-  #       with:
-  #         dotnet-version: |
-  #           8.0.x
+    steps:
+      - name: Download release assets artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets
 
-  #     - name: Setup NuGet.exe
-  #       uses: NuGet/setup-nuget@v2
+      - name: Upload assets to release (replace existing)
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ needs.get_upstream.outputs.upstream_tag }}
+          allowUpdates: true
+          omitBodyDuringUpdate: true
+          artifacts: 'release-assets/*'
+          artifactErrorsFailBuild: true
+          replacesArtifacts: true
 
-  #     - name: Restore + Build (auto-detect .sln)
-  #       shell: pwsh
-  #       run: |
-  #         $ErrorActionPreference = "Stop"
-  #         $sln = Get-ChildItem -Path . -Filter *.sln -Recurse | Select-Object -First 1
-  #         if (-not $sln) { throw "No .sln found in repo. Add one or hardcode the solution path in the workflow." }
+  publish_packages_and_release:
+    name: Push nupkgs to GitHub Packages + (optional) publish release
+    runs-on: ubuntu-latest
+    needs:
+      - get_upstream
+      - upsert_release
+      - build_required_projects
+      - upload_assets_to_release
+    permissions:
+      packages: write
+      contents: write
 
-  #         dotnet restore $sln.FullName
-  #         dotnet build   $sln.FullName -c $env:CONFIGURATION --no-restore
+    # Only publish when we are rebuilding:
+    # - nuget_version != upstream_version (suffix used), OR
+    # - nuget_version != stored_nuget_version (e.g., 001 -> 002)
+    # Wire stored_nuget_version from your release-body marker check job.
+    #
+    if: >-
+      ${{ needs.get_upstream.outputs.nuget_version != needs.get_upstream.outputs.upstream_version ||
+      needs.get_upstream.outputs.nuget_version != needs.upsert_release.outputs.stored_nuget_version }}
 
-  #     - name: Pack nuspecs (raw upstream version) + collect referenced DLLs
-  #       id: pack
-  #       shell: pwsh
-  #       run: |
-  #         $ErrorActionPreference = "Stop"
+    steps:
+      - name: Download release assets (nupkgs)
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets
 
-  #         $outRoot = Join-Path $PWD "out"
-  #         $pkgDir  = Join-Path $outRoot "packages-raw"
-  #         $dllDir  = Join-Path $outRoot "dlls"
-  #         New-Item -ItemType Directory -Force -Path $pkgDir, $dllDir | Out-Null
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          source-url: ${{ env.NUGET_SOURCE_URL }}
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+        env:
+          NUGET_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  #         $version = "${{ steps.versions.outputs.upstream_version }}"
+      - name: Push nupkgs to GitHub Packages
+        shell: pwsh
+        run: |
+          dotnet nuget push "release-assets/*.nupkg" `
+          --source "${{ env.NUGET_SOURCE_URL }}" `
+          --api-key "${{ secrets.GITHUB_TOKEN }}" `
+          --skip-duplicate
 
-  #         $nuspecs = @()
-  #         "${{ env.NUSPECS }}" -split "`n" | ForEach-Object {
-  #           $p = $_.Trim()
-  #           if ($p) { $nuspecs += $p }
-  #         }
-
-  #         foreach ($ns in $nuspecs) {
-  #           if (-not (Test-Path $ns)) { throw "Nuspec not found: $ns" }
-
-  #           Write-Host "Packing: $ns (version=$version)"
-  #           nuget pack $ns -Version $version -Properties "Configuration=$env:CONFIGURATION" -OutputDirectory $pkgDir -NonInteractive
-
-  #           # Collect DLLs listed in <files><file src="...dll" .../>
-  #           [xml]$x = Get-Content $ns -Raw
-  #           $nsm = New-Object System.Xml.XmlNamespaceManager($x.NameTable)
-  #           $nsm.AddNamespace("n", $x.DocumentElement.NamespaceURI)
-
-  #           $fileNodes = $x.SelectNodes("//n:files/n:file", $nsm)
-  #           foreach ($node in $fileNodes) {
-  #             $src = $node.GetAttribute("src")
-  #             if ([string]::IsNullOrWhiteSpace($src)) { continue }
-
-  #             # nuspec src paths are relative to nuspec file
-  #             $nsDir = Split-Path -Parent (Resolve-Path $ns)
-  #             $full  = Resolve-Path (Join-Path $nsDir $src) -ErrorAction Stop
-
-  #             if ($full.Path.ToLower().EndsWith(".dll")) {
-  #               Copy-Item -Force $full.Path -Destination $dllDir
-  #             }
-  #           }
-  #         }
-
-  #         Write-Host "Packed nupkgs:"
-  #         Get-ChildItem $pkgDir -Filter *.nupkg | ForEach-Object { Write-Host " - $($_.FullName)" }
-
-  #         Write-Host "Collected dlls:"
-  #         Get-ChildItem $dllDir -Filter *.dll | ForEach-Object { Write-Host " - $($_.FullName)" }
-
-  #     - name: Pack nuspecs (publish version with suffix) for GitHub Packages
-  #       shell: pwsh
-  #       run: |
-  #         $ErrorActionPreference = "Stop"
-
-  #         $outRoot = Join-Path $PWD "out"
-  #         $pkgDir  = Join-Path $outRoot "packages-publish"
-  #         New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
-
-  #         $version = "${{ steps.versions.outputs.publish_version }}"
-
-  #         $nuspecs = @()
-  #         "${{ env.NUSPECS }}" -split "`n" | ForEach-Object {
-  #           $p = $_.Trim()
-  #           if ($p) { $nuspecs += $p }
-  #         }
-
-  #         foreach ($ns in $nuspecs) {
-  #           Write-Host "Packing (publish): $ns (version=$version)"
-  #           nuget pack $ns -Version $version -Properties "Configuration=$env:CONFIGURATION" -OutputDirectory $pkgDir -NonInteractive
-  #         }
-
-  #     - name: Upload artifacts (raw packages + dlls + publish packages)
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: build-output
-  #         path: |
-  #           out/packages-raw/*.nupkg
-  #           out/packages-publish/*.nupkg
-  #           out/dlls/*.dll
-  #         if-no-files-found: error
-
-  # sync_release_and_upload_assets:
-  #   name: Create/update fork release + upload assets (from upstream body)
-  #   runs-on: ubuntu-latest
-  #   needs: [build_and_pack_windows]
-  #   steps:
-  #     - name: Download build artifacts
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         name: build-output
-  #         path: out
-
-  #     - name: Fetch upstream latest release info (tag + body)
-  #       id: upstream
-  #       env:
-  #         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #       run: |
-  #         set -euo pipefail
-  #         r="$(gh api "repos/${UPSTREAM_REPO}/releases/latest")"
-  #         tag="$(printf '%s' "$r" | jq -r '.tag_name')"
-  #         body="$(printf '%s' "$r" | jq -r '.body // ""')"
-  #         if [ -z "$tag" ] || [ "$tag" = "null" ]; then
-  #           echo "Upstream latest release has no tag_name." >&2
-  #           exit 1
-  #         fi
-
-  #         echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
-  #         # Save body for release creation
-  #         mkdir -p meta
-  #         printf '%s' "$body" > meta/upstream-body.md
-
-  #     - name: Create release in fork if missing (keep upstream body)
-  #       id: release
-  #       env:
-  #         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #       run: |
-  #         set -euo pipefail
-  #         tag="${{ steps.upstream.outputs.tag }}"
-
-  #         if gh release view "$tag" >/dev/null 2>&1; then
-  #           echo "exists=true" >> "$GITHUB_OUTPUT"
-  #           echo "Release already exists: $tag"
-  #         else
-  #           echo "exists=false" >> "$GITHUB_OUTPUT"
-  #           echo "Creating release: $tag"
-
-  #           # Create tag implicitly via release creation.
-  #           # We attach upstream body.
-  #           gh release create "$tag" \
-  #             --title "$tag" \
-  #             --notes-file meta/upstream-body.md \
-  #             --latest
-  #         fi
-
-  #     - name: Upload/replace assets (raw nupkgs + dlls) to fork release
-  #       env:
-  #         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #       run: |
-  #         set -euo pipefail
-  #         tag="${{ steps.upstream.outputs.tag }}"
-
-  #         # Replace assets if already present
-  #         shopt -s nullglob
-  #         assets=( out/packages-raw/*.nupkg out/dlls/*.dll )
-  #         if [ ${#assets[@]} -eq 0 ]; then
-  #           echo "No assets found to upload." >&2
-  #           exit 1
-  #         fi
-
-  #         gh release upload "$tag" "${assets[@]}" --clobber
-
-  # publish_github_packages:
-  #   name: Publish nupkgs to GitHub Packages
-  #   runs-on: windows-latest
-  #   needs: [build_and_pack_windows]
-  #   steps:
-  #     - name: Download build artifacts
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         name: build-output
-  #         path: out
-
-  #     - name: Setup .NET
-  #       uses: actions/setup-dotnet@v4
-  #       with:
-  #         dotnet-version: |
-  #           8.0.x
-
-  #     - name: Add GitHub Packages NuGet source
-  #       shell: pwsh
-  #       run: |
-  #         $ErrorActionPreference = "Stop"
-  #         $owner = "${{ github.repository_owner }}"
-  #         dotnet nuget remove source github 2>$null | Out-Null
-  #         dotnet nuget add source "https://nuget.pkg.github.com/$owner/index.json" `
-  #           --name github `
-  #           --username "$owner" `
-  #           --password "${{ secrets.GITHUB_TOKEN }}" `
-  #           --store-password-in-clear-text
-
-  #     - name: Push publish packages (suffix version)
-  #       shell: pwsh
-  #       run: |
-  #         $ErrorActionPreference = "Stop"
-  #         $pkgs = Get-ChildItem -Path out\packages-publish -Filter *.nupkg
-  #         if (-not $pkgs) { throw "No publish packages found." }
-
-  #         foreach ($p in $pkgs) {
-  #           Write-Host "Pushing $($p.FullName)"
-  #           dotnet nuget push $p.FullName --source github --skip-duplicate
-  #         }
+      # Optional: publish the GitHub Release (draft -> published)
+      # This is safe to run even if it is already published.
+      - name: Publish the GitHub Release (draft -> published)
+        if: success()
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ needs.get_upstream.outputs.upstream_tag }}
+          draft: false
+          allowUpdates: true
+          omitBodyDuringUpdate: true

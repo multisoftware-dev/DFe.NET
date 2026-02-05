@@ -2,19 +2,10 @@
   <PropertyGroup>
     <TargetFrameworks>$(AdditionalNetFramework);netstandard2.0;$(AdditionalNetWindows)</TargetFrameworks>
     <PlatformTarget>AnyCpu</PlatformTarget>
-    <Configuration Condition="'$(Configuration)'==''">Release</Configuration>
+    <Configurations>Release</Configurations>
     <NoBuild>true</NoBuild>
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <NuspecFile>MultiCTe.Zeus.Danfe.Nativo.nuspec</NuspecFile>
-    <NuspecProperties>Configuration=$(Configuration)</NuspecProperties>
-    <Deterministic>true</Deterministic>
-    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
-    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
   </PropertyGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\..\NFe.Danfe.Base\NFe.Danfe.Base.csproj" />
-    <ProjectReference Include="..\..\NFe.Danfe.Nativo\NFe.Danfe.Nativo.csproj" />
-  </ItemGroup>
 
 </Project>
