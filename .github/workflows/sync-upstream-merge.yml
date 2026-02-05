@@ -3,8 +3,6 @@ name: Sync master -> multicte-build (MERGE)
 on:
   push:
     branches: [master]
-    paths-ignore:
-      - ".github/**"
   workflow_dispatch:
     inputs:
       target_branch:
