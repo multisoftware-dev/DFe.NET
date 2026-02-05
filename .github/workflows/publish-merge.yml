@@ -1,9 +1,8 @@
-name: multicte-build (build, sync upstream release, upload assets, publish)
+name: Publish (MERGE)
 
 on:
-  pull_request:
+  push:
     branches: [multicte-build]
-    types: [closed]
   workflow_dispatch:
     inputs:
       version_suffix:
@@ -30,12 +29,11 @@ env:
 
 jobs:
   classify:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true }}
     runs-on: ubuntu-latest
     outputs:
-      mode: ${{ steps.cls.outputs.mode }}
+      mode: ${{ steps.cls.outputs.mode }}                 # sync | maintenance | manual
       should_rebuild: ${{ steps.cls.outputs.should_rebuild }}
-      suffix: ${{ steps.cls.outputs.suffix }}
+      suffix: ${{ steps.cls.outputs.suffix }}             # "" | "auto" | "001" (manual)
     steps:
       - id: cls
         uses: actions/github-script@v7
@@ -43,7 +41,7 @@ jobs:
           script: |
             const eventName = context.eventName;
 
-            // Manual run
+            // Manual run always rebuilds
             if (eventName === "workflow_dispatch") {
               const suffix = (context.payload.inputs?.version_suffix ?? "").trim();
               core.setOutput("mode", "manual");
@@ -52,61 +50,68 @@ jobs:
               return;
             }
 
-            // PR merged into multicte-build
-            const pr = context.payload.pull_request;
-            const prNumber = pr.number;
-            const prUser = pr.user?.login ?? "";
-            const prHeadRef = pr.head?.ref ?? "";
-            const prTitle = pr.title ?? "";
+            // Push on multicte-build: classify by changed files in this push
+            const before = context.payload.before;
+            const after = context.payload.after;
 
-            // Detect sync PR (created by bot)
-            const isSync =
-              prUser === "github-actions[bot]" ||
-              prHeadRef === "bot/sync-master-to-multicte-build" ||
-              prTitle.toLowerCase().includes("sync: master -> multicte-build");
-
-            // Determine if PR touched packaging-related files
-            const files = await github.paginate(github.rest.pulls.listFiles, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: prNumber,
-              per_page: 100
-            });
-
-            const changed = files.map(f => f.filename);
-
-            const isPackagingChange = changed.some(p =>
-              p.startsWith("NuGet-MultiCTe/") ||
-              p === "Directory.Build.props" ||
-              p === "Directory.Build.targets" ||
-              p.startsWith("NuGet-MultiCTe/") ||
-              p.endsWith(".nuspec")
-            );
-
-            // Rules:
-            // - Sync PR => always run (upstream publish)
-            // - Non-sync PR => only run if packaging changed
-            if (isSync) {
+            // In rare cases, 'before' can be all zeros (new branch) - treat as sync
+            if (!before || /^0+$/.test(before)) {
               core.setOutput("mode", "sync");
               core.setOutput("should_rebuild", "true");
-              core.setOutput("suffix", ""); // NO suffix for upstream publish
+              core.setOutput("suffix", "");
+              core.notice("No valid 'before' SHA (new branch or force push). Treating as sync.");
               return;
             }
 
-            if (!isPackagingChange) {
+            const cmp = await github.rest.repos.compareCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              base: before,
+              head: after
+            });
+
+            const files = (cmp.data.files ?? []).map(f => f.filename);
+
+            if (files.length === 0) {
               core.setOutput("mode", "maintenance");
               core.setOutput("should_rebuild", "false");
               core.setOutput("suffix", "");
-              core.notice("Non-sync PR without packaging changes -> skipping rebuild/publish.");
+              core.notice("No file changes detected in compare. Skipping.");
               return;
             }
 
-            core.setOutput("mode", "maintenance");
-            core.setOutput("should_rebuild", "true");
+            const isGithubOnly = files.every(p => p.startsWith(".github/"));
 
-            // Auto-generate suffix for maintenance PRs unless user provided one in workflow_dispatch
-            // We'll generate later after reading the stored marker; for now mark as "auto"
-            core.setOutput("suffix", "auto");
+            const isOverlayOnly = files.every(p =>
+              p.startsWith(".github/") ||
+              p.startsWith("NuGet-MultiCTe/") ||
+              p === "Directory.Build.props" ||
+              p === "Directory.Build.targets" ||
+              p.endsWith(".nuspec")
+            );
+
+            if (isGithubOnly) {
+              core.setOutput("mode", "maintenance");
+              core.setOutput("should_rebuild", "false");
+              core.setOutput("suffix", "");
+              core.notice("Only .github/** changes -> skipping rebuild/publish.");
+              return;
+            }
+
+            if (isOverlayOnly) {
+              core.setOutput("mode", "maintenance");
+              core.setOutput("should_rebuild", "true");
+              core.setOutput("suffix", "auto"); // maintenance rebuilds are suffixed
+              core.notice("Overlay-only change -> maintenance rebuild with auto suffix.");
+              return;
+            }
+
+            // Any other change => treat as upstream sync
+            core.setOutput("mode", "sync");
+            core.setOutput("should_rebuild", "true");
+            core.setOutput("suffix", ""); // sync publishes without suffix
+            core.notice("Non-overlay change detected -> sync publish without suffix.");
+
   get_upstream:
     name: Get upstream latest release + compute versions
     runs-on: ubuntu-latest
@@ -155,18 +160,14 @@ jobs:
 
             const upstreamVersion = parts.join(".");
 
-            // 2) Suffix rules
+            // suffix rules:
             // - sync => never suffix
             // - manual => use provided suffix if any
-            // - maintenance => suffix=auto => bump based on release marker
-            if (mode === "sync") {
-              suffix = "";
-            }
+            // - maintenance => suffix=auto => bump based on release marker (or 001 if first maintenance)
+            if (mode === "sync") suffix = "";
 
-            // normalize suffix to digits only
             let suffixDigits = suffix.replace(/\D+/g, "");
 
-            // Auto suffix: compute based on fork release marker (only if release exists)
             if (suffixDigits === "" && suffix === "auto") {
               const markerRe = /<!--\s*multicte-nuget-version:\s*([^\s]+)\s*-->/i;
 
@@ -182,33 +183,25 @@ jobs:
                 if (e.status !== 404) throw e;
               }
 
-              // If the fork release doesn't exist yet, first publication should be base version (no suffix)
               if (!forkRelease) {
-                suffixDigits = (mode === "maintenance") ? "001" : "";
+                // first maintenance publication against this upstream tag
+                suffixDigits = "001";
               } else {
                 const body = forkRelease.body ?? "";
                 const m = body.match(markerRe);
                 const stored = m ? m[1] : "";
 
-                // Expected stored formats:
-                // - 2026.02.05.1303           (no suffix)
-                // - 2026.02.05.1303001        (suffix 001)
-                //
-                // If stored starts with upstreamVersion and has extra digits on last block => bump last 3 digits
                 let next = 1;
                 if (stored && stored.startsWith(upstreamVersion)) {
                   const lastBlockStored = stored.split(".")[3] ?? "";
                   const lastBlockUp = upstreamVersion.split(".")[3] ?? "";
-                  const extra = lastBlockStored.substring(lastBlockUp.length); // suffix digits after HHmm
-                  if (/^\d{3}$/.test(extra)) {
-                    next = parseInt(extra, 10) + 1;
-                  }
+                  const extra = lastBlockStored.substring(lastBlockUp.length);
+                  if (/^\d{3}$/.test(extra)) next = parseInt(extra, 10) + 1;
                 }
                 suffixDigits = String(next).padStart(3, "0");
               }
             }
 
-            // 3) Build nuget version: append suffixDigits to HHmm block
             let nugetVersion = upstreamVersion;
             if (suffixDigits.length > 0) {
               const p = upstreamVersion.split(".");
@@ -220,10 +213,6 @@ jobs:
             core.setOutput("upstream_version", upstreamVersion);
             core.setOutput("nuget_version", nugetVersion);
 
-            core.notice(`Mode: ${mode}`);
-            core.notice(`Upstream tag: ${upstreamTag}`);
-            core.notice(`Upstream version: ${upstreamVersion}`);
-            core.notice(`NuGet version: ${nugetVersion}`);
   upsert_release:
     name: Create draft / Update existing fork release (suffix-aware)
     runs-on: ubuntu-latest
@@ -232,7 +221,6 @@ jobs:
     outputs:
       exists: ${{ steps.compute.outputs.exists }}
       stored_nuget_version: ${{ steps.compute.outputs.stored_nuget_version }}
-
     steps:
       - name: Compute release body + marker (single API read path)
         id: compute
@@ -251,11 +239,6 @@ jobs:
             const upstreamVersion = `${{ needs.get_upstream.outputs.upstream_version }}`;
             const nugetVersion = `${{ needs.get_upstream.outputs.nuget_version }}`;
             const branch = "multicte-build";
-
-            if (!upstreamTag) {
-              core.setFailed("Missing upstream_tag.");
-              return;
-            }
 
             const markerRe = /<!--\s*multicte-nuget-version:\s*([^\s]+)\s*-->/i;
             const markerLine = `<!-- multicte-nuget-version: ${nugetVersion} -->`;
@@ -342,7 +325,6 @@ jobs:
                 }
               }
               lines.push("");
-
               lines.push(`## Commits (${Math.min(commitSummaries.length, MAX_COMMITS)}${commitSummaries.length > MAX_COMMITS ? "+" : ""})`);
               for (const c of commitSummaries.slice(0, MAX_COMMITS)) {
                 const short = c.sha.substring(0,7);
@@ -357,7 +339,6 @@ jobs:
             }
 
             const mode = `${{ needs.classify.outputs.mode }}`;
-
 
             // ---- CASE B: release exists => optionally append delta
             let body = existingBody;
@@ -439,6 +420,7 @@ jobs:
           body: ${{ steps.compute.outputs.release_body }}
           draft: true
           allowUpdates: false
+
       - name: Update release body (only if exists)
         if: ${{ steps.compute.outputs.exists == 'true' }}
         uses: ncipollo/release-action@v1
@@ -454,7 +436,6 @@ jobs:
     runs-on: windows-2022
     needs: [get_upstream, upsert_release, classify]
     if: ${{ needs.classify.outputs.should_rebuild == 'true' }}
-
     steps:
       - uses: actions/checkout@v4
         with:
@@ -464,24 +445,16 @@ jobs:
         shell: pwsh
         run: echo "${{ needs.get_upstream.outputs.nuget_version }}"
 
-      - name: Setup .NET 8.0.x
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: ${{ env.DOTNET_VERSION }}
           cache: true
           cache-dependency-path: |
             **/*.csproj
             **/*.props
             **/*.targets
 
-      # - name: Install .NET Framework dev packs (net472, net48)
-      #   shell: pwsh
-      #   run: |
-      #     choco install netfx-4.7.2-devpack netfx-4.8-devpack -y --no-progress
-
-      # --------------------
-      # RESTORE (explicit)
-      # --------------------
       - name: Restore Base
         shell: pwsh
         run: |
@@ -512,9 +485,6 @@ jobs:
           dotnet restore ".\NuGet-MultiCTe\MultiCTe.Zeus.Danfe.Nativo\MultiCTe.Zeus.Danfe.Nativo.csproj"
           dotnet restore ".\NuGet-MultiCTe\MultiCTe.Zeus.Danfe.OpenFast\MultiCTe.Zeus.Danfe.OpenFast.csproj"
 
-      # --------------------
-      # BUILD (no restore)
-      # --------------------
       - name: Build Base
         shell: pwsh
         run: |
@@ -543,6 +513,7 @@ jobs:
           dotnet build -c Release --no-restore -p:Version=$av -p:AssemblyVersion=$av -p:FileVersion=$av -p:InformationalVersion=$pv ".\NFe.Danfe.Base\NFe.Danfe.Base.csproj"
           dotnet build -c Release --no-restore -p:Version=$av -p:AssemblyVersion=$av -p:FileVersion=$av -p:InformationalVersion=$pv ".\NFe.Danfe.Nativo\NFe.Danfe.Nativo.csproj"
           dotnet build -c Release --no-restore -p:Version=$av -p:AssemblyVersion=$av -p:FileVersion=$av -p:InformationalVersion=$pv ".\NFe.Danfe.OpenFast\NFe.Danfe.OpenFast.csproj"
+
       - name: Pack (dotnet pack via NuspecFile wrappers)
         shell: pwsh
         run: |
@@ -568,15 +539,12 @@ jobs:
           }
 
           function Get-TfmFromPath([string]$p) {
-            # Typical layout: ...\bin\Release\<tfm>\X.dll  OR ...\bin\Release\<tfm>\publish\X.dll
             $norm = $p -replace '/', '\'
             $m = [regex]::Match($norm, '\\bin\\Release\\([^\\]+)\\')
             if ($m.Success) { return $m.Groups[1].Value }
             return "unknown"
           }
 
-          # 2) Collect DLLs referenced by nuspec <files><file src="..."> into:
-          #    <assets>\<dll-name-without-ext>\<tfm>\<full-dll-name>
           $nuspecs = @(
             "NuGet-MultiCTe\MultiCTe.Zeus.NFe\MultiCTe.Zeus.NFe.nuspec",
             "NuGet-MultiCTe\MultiCTe.Zeus.Danfe.Nativo\MultiCTe.Zeus.Danfe.Nativo.nuspec",
@@ -599,14 +567,13 @@ jobs:
               $nodes = $x.SelectNodes("//n:files/n:file", $nsm)
             }
             if (-not $nodes -or $nodes.Count -eq 0) {
-              $nodes = $x.SelectNodes("//files/file") # fallback (no namespace)
+              $nodes = $x.SelectNodes("//files/file")
             }
 
             foreach ($node in $nodes) {
               $src = $node.GetAttribute("src")
               if ([string]::IsNullOrWhiteSpace($src)) { continue }
 
-              # Expand wildcards relative to nuspec folder
               $pattern = Join-Path $nsDir $src
               $matches = Get-ChildItem -Path $pattern -File -ErrorAction SilentlyContinue
               if (-not $matches) { continue }
@@ -626,9 +593,6 @@ jobs:
             }
           }
 
-          Write-Host "Assets collected:"
-          Get-ChildItem $assets -Recurse -File | ForEach-Object { Write-Host " - $($_.FullName.Replace($assets,'').TrimStart('\'))" }
-
       - name: Upload build artifacts for release upload
         uses: actions/upload-artifact@v4
         with:
@@ -641,10 +605,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [get_upstream, upsert_release, build_required_projects, classify]
     if: ${{ needs.classify.outputs.should_rebuild == 'true' }}
-
     permissions:
       contents: write
-
     steps:
       - name: Download release assets artifact
         uses: actions/download-artifact@v4
@@ -656,18 +618,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           cd release-assets
-
-          # zip each top-level directory: <dir>.zip
           for d in */ ; do
             d="${d%/}"
             [ -d "$d" ] || continue
-            echo "Zipping $d -> ${d}.zip"
             (cd "$d" && zip -r "../${d}.zip" .)
           done
-
-          ls -la *.zip || true
 
       - name: Upload assets to release (replace existing)
         uses: ncipollo/release-action@v1
@@ -694,7 +650,6 @@ jobs:
     permissions:
       packages: write
       contents: write
-
     steps:
       - name: Download release assets (nupkgs)
         uses: actions/download-artifact@v4
@@ -718,8 +673,6 @@ jobs:
           --api-key "${{ secrets.GITHUB_TOKEN }}" `
           --skip-duplicate
 
-      # Optional: publish the GitHub Release (draft -> published)
-      # This is safe to run even if it is already published.
       - name: Publish the GitHub Release (draft -> published)
         if: success()
         uses: ncipollo/release-action@v1
