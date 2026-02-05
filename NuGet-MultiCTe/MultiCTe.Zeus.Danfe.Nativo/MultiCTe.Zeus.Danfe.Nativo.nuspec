@@ -54,8 +54,8 @@
       target="lib/netstandard2.0/NFe.Danfe.Nativo.dll" />
 
     <!-- net8.0-windows7.0 -->
-    <file src="..\..\NFe.Danfe.Base\bin\Release\net8.0\NFe.Danfe.Base.dll"
-      target="lib/net8.0/NFe.Danfe.Base.dll" />
+    <file src="..\..\NFe.Danfe.Base\bin\Release\net8.0-windows7.0\NFe.Danfe.Base.dll"
+      target="lib/net8.0-windows7.0/NFe.Danfe.Base.dll" />
     <file src="..\..\NFe.Danfe.Nativo\bin\Release\net8.0-windows7.0\NFe.Danfe.Nativo.dll"
       target="lib/net8.0-windows7.0/NFe.Danfe.Nativo.dll" />
 

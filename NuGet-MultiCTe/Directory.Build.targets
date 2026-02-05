@@ -6,14 +6,12 @@
     <IsNet462MultiTarget
       Condition="'$(IsMultiTarget)' == 'true' and $(TargetFrameworks.Contains('net462'))">true</IsNet462MultiTarget>
     <IsNet6MultiTarget
-      Condition="'$(IsMultiTarget)' == 'true' and $(TargetFrameworks.Contains('net6.0'))">true</IsNet6MultiTarget>
+      Condition="'$(IsMultiTarget)' == 'true' and $(TargetFrameworks.Contains('net6.0')) and !$(TargetFrameworks.Contains('net6.0-windows'))">true</IsNet6MultiTarget>
     <IsNet6MultiTargetWindows
-      Condition="'$(IsMultiTarget)' == 'true' and $(TargetFrameworks.Contains('net6.0')) and $(TargetFrameworks.Contains('-windows'))">
-      true</IsNet6MultiTargetWindows>
+      Condition="'$(IsMultiTarget)' == 'true' and $(TargetFrameworks.Contains('net6.0')) and $(TargetFrameworks.Contains('net6.0-windows'))">true</IsNet6MultiTargetWindows>
 
     <IsExcludedProject
-      Condition="$(MSBuildProjectName.Contains('AppTeste')) Or $(MSBuildProjectName.Contains('.Testes')) Or $(MSBuildProjectName.EndsWith('.App')) or '$(MSBuildProjectName)' == 'NFe.Wsdl'">
-      true</IsExcludedProject>
+      Condition="$(MSBuildProjectName.Contains('AppTeste')) Or $(MSBuildProjectName.Contains('.Testes')) Or $(MSBuildProjectName.EndsWith('.App')) or '$(MSBuildProjectName)' == 'NFe.Wsdl'">true</IsExcludedProject>
 
     <IsDanfeProject Condition="$(MSBuildProjectName.StartsWith('NFe.Danfe.'))">true</IsDanfeProject>
   </PropertyGroup>
@@ -36,6 +34,12 @@
     Condition="'$(IsMultiTarget)' == 'true' and '$(IsExcludedProject)' != 'true' and '$(IsNet6MultiTargetWindows)' == 'true'">
     <TargetFrameworks>$(TargetFrameworks);$(AdditionalNetWindows)</TargetFrameworks>
   </PropertyGroup>
+
+
+  <!-- <PropertyGroup Condition="'$(IsMultiTarget)' == 'true' and
+  $(TargetFrameworks.Contains('-windows'))">
+    <TargetFrameworks>$(TargetFrameworks);$(AdditionalNetWindows)</TargetFrameworks>
+  </PropertyGroup> -->
 
 
   <!-- <PropertyGroup
