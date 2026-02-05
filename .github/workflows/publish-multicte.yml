@@ -338,10 +338,10 @@ jobs:
             **/*.props
             **/*.targets
 
-      - name: Install .NET Framework dev packs (net472, net48)
-        shell: pwsh
-        run: |
-          choco install netfx-4.7.2-devpack netfx-4.8-devpack -y --no-progress
+      # - name: Install .NET Framework dev packs (net472, net48)
+      #   shell: pwsh
+      #   run: |
+      #     choco install netfx-4.7.2-devpack netfx-4.8-devpack -y --no-progress
 
       # --------------------
       # RESTORE (explicit)
@@ -413,6 +413,7 @@ jobs:
           dotnet pack -c Release --no-build -p:NuspecProperties=version=$v -p:PackageVersion=$v -o .\out\packages ".\NuGet-MultiCTe\MultiCTe.Zeus.NFe\MultiCTe.Zeus.NFe.csproj"
           dotnet pack -c Release --no-build -p:NuspecProperties=version=$v -p:PackageVersion=$v -o .\out\packages ".\NuGet-MultiCTe\MultiCTe.Zeus.Danfe.Nativo\MultiCTe.Zeus.Danfe.Nativo.csproj"
           dotnet pack -c Release --no-build -p:NuspecProperties=version=$v -p:PackageVersion=$v -o .\out\packages ".\NuGet-MultiCTe\MultiCTe.Zeus.Danfe.OpenFast\MultiCTe.Zeus.Danfe.OpenFast.csproj"
+
       - name: Collect release assets (nupkg + referenced dlls from nuspec; dlls grouped by name/tfm)
         shell: pwsh
         run: |
