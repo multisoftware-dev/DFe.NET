@@ -1,15 +1,19 @@
-name: Sync master -> multicte-build (PR + auto-merge)
+name: Sync master -> multicte-build (PR)
 
 on:
-  push:
-    branches: [master]
-    paths-ignore:
-      - ".github/**"
+  # push:
+  #   branches: [master]
+  #   paths-ignore:
+  #     - ".github/**"
   workflow_dispatch:
 
 permissions:
   contents: write
   pull-requests: write
+
+concurrency:
+  group: sync-master
+  cancel-in-progress: false
 
 jobs:
   sync:

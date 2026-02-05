@@ -1,0 +1,51 @@
+name: Sync master -> multicte-build (MERGE)
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - ".github/**"
+  workflow_dispatch:
+
+# No pull-requests permission needed.
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-master
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout multicte-build (full history)
+        uses: actions/checkout@v4
+        with:
+          ref: multicte-build
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Fetch master
+        run: |
+          git fetch origin master:refs/remotes/origin/master
+
+      - name: Configure git identity (author/committer metadata)
+        run: |
+          git config user.name "${GITHUB_ACTOR}"
+          git config user.email "${GITHUB_ACTOR_ID}+${GITHUB_ACTOR}@users.noreply.github.com"
+
+      - name: Merge master into multicte-build (local)
+        run: |
+          # Ensure we're on multicte-build
+          git checkout multicte-build
+
+          # Merge (creates a merge commit when needed)
+          git merge --no-ff --no-edit origin/master || {
+            echo "Merge conflicts. Resolve manually by merging master -> multicte-build yourself."
+            exit 1
+          }
+
+      - name: Push multicte-build
+        run: |
+          git push origin HEAD:multicte-build
