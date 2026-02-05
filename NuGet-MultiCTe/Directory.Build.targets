@@ -35,6 +35,11 @@
     <TargetFrameworks>$(TargetFrameworks);$(AdditionalNetWindows)</TargetFrameworks>
   </PropertyGroup>
 
+  <PropertyGroup
+    Condition="'$(IsMultiTarget)' == 'true' and '$(IsExcludedProject)' != 'true' and '$(MSBuildProjectName)' == 'NFe.Danfe.Base'">
+    <TargetFrameworks>$(TargetFrameworks);$(AdditionalNetWindows)</TargetFrameworks>
+  </PropertyGroup>
+
 
   <!-- <PropertyGroup Condition="'$(IsMultiTarget)' == 'true' and
   $(TargetFrameworks.Contains('-windows'))">
