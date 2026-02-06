@@ -43,6 +43,11 @@
   </metadata>
   <files>
 
+    <file src="..\..\NFe.Danfe.Base\NFCe\NFCe.frx" target="contentFiles\any\any\NFCe\NFCe.frx" />
+    <file src="..\..\NFe.Danfe.Base\NFe\NFeEvento.frx" target="contentFiles\any\any\NFe\NFeEvento.frx" />
+    <file src="..\..\NFe.Danfe.Base\NFe\NFeRetrato.frx" target="contentFiles\any\any\NFe\NFeRetrato.frx" />
+    <file src="..\..\NFe.Danfe.Base\NFe\NFeSimplificado.frx" target="contentFiles\any\any\NFe\NFeSimplificado.frx" />
+
     <!-- netstandard2.0 -->
     <file src="..\..\NFe.Danfe.Base\bin\Release\netstandard2.0\NFe.Danfe.Base.dll"
       target="lib/netstandard2.0/NFe.Danfe.Base.dll" />
