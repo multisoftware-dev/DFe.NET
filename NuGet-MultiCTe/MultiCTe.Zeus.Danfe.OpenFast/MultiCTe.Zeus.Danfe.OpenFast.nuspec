@@ -40,13 +40,15 @@
         <dependency id="FastReport.OpenSource.Export.PdfSimple" version="2022.2.2" />
       </group>
     </dependencies>
+    <contentFiles>
+      <files include="any/any/NFe/*.frx" buildAction="Content" copyToOutput="true" flatten="false" />
+      <files include="any/any/NFCe/*.frx" buildAction="Content" copyToOutput="true" flatten="false" />
+    </contentFiles>
   </metadata>
   <files>
 
-    <file src="..\..\NFe.Danfe.Base\NFCe\NFCe.frx" target="contentFiles\any\any\NFCe\NFCe.frx" />
-    <file src="..\..\NFe.Danfe.Base\NFe\NFeEvento.frx" target="contentFiles\any\any\NFe\NFeEvento.frx" />
-    <file src="..\..\NFe.Danfe.Base\NFe\NFeRetrato.frx" target="contentFiles\any\any\NFe\NFeRetrato.frx" />
-    <file src="..\..\NFe.Danfe.Base\NFe\NFeSimplificado.frx" target="contentFiles\any\any\NFe\NFeSimplificado.frx" />
+    <file src="..\..\NFe.Danfe.Base\NFe\*.frx" target="contentFiles\any\any\NFe" />
+    <file src="..\..\NFe.Danfe.Base\NFCe\*.frx" target="contentFiles\any\any\NFCe" />
 
     <!-- netstandard2.0 -->
     <file src="..\..\NFe.Danfe.Base\bin\Release\netstandard2.0\NFe.Danfe.Base.dll"
